@@ -2,7 +2,7 @@ import { parseScan, BRANDS, DEFAULT_BRAND_RULES } from './parser.js';
 import { makePlacer, traySummary, groupCount, rangeProblems, isBlankSerial, capOf } from './trays.js';
 import { newWorkspace, uid, shortId, stationsForMembers } from './defaults.js';
 import * as db from './store.js';
-import { CloudSync, makeJoinLink, readJoinLink, scanToRow, rowToScan } from './sync.js';
+import { SheetSync, makeJoinLink, readJoinLink, scanToRow, rowToScan, setupScript } from './sync.js';
 import { loadScript } from './load.js';
 import { exportWorkbook, readScansFromWorkbook, downloadText, scansToCsv, fmtTime, STATUS_TEXT } from './excel.js';
 
@@ -705,6 +705,35 @@ function renderSettings() {
   renderSyncCard();
 }
 
+function gsheetSecret() {
+  let sec = LS.get('gsheetSecret');
+  if (!sec) {
+    sec = shortId(24);
+    LS.set('gsheetSecret', sec);
+  }
+  return sec;
+}
+
+let scriptTemplate = null;
+async function copySetupScript() {
+  try {
+    if (!scriptTemplate) {
+      const res = await fetch('gsheet/Code.gs', { cache: 'no-cache' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      scriptTemplate = await res.text();
+    }
+    const text = setupScript(scriptTemplate, gsheetSecret());
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Script copied — paste it into Apps Script', 4000);
+    } catch {
+      await dialog({ title: 'Copy this script', body: `<textarea rows="14" readonly id="scriptText">${esc(text)}</textarea>`, bind: (r) => setTimeout(() => r.querySelector('#scriptText').select(), 50) });
+    }
+  } catch (e) {
+    toast('Could not load the script: ' + e.message, 5000);
+  }
+}
+
 function renderSyncCard() {
   const ws = state.ws;
   const body = $('#syncBody');
@@ -712,28 +741,29 @@ function renderSyncCard() {
     const s = state.syncStatus || {};
     const link = makeJoinLink(ws);
     body.innerHTML = `
-      <p>This project is <b>shared live</b>. Everyone who opens the team link sees the same trays and scans in real time; scanning keeps working offline and catches up later.</p>
-      <p>Status: <b>${esc(s.state || 'connecting')}</b>${s.pending ? ` · ${s.pending} change(s) waiting to upload` : ''}${s.error ? ` · <span class="warn-text">${esc(s.error)}</span>` : ''}</p>
+      <p>This project is <b>shared with your team through your Google Sheet</b>. Every member's scans appear for everyone within a few seconds. Each device also keeps its own full copy, so scanning keeps working offline and uploads later.</p>
+      <p>Status: <b>${esc(s.state || 'connecting')}</b>${s.pending ? ` · ${s.pending} change(s) waiting to upload` : ''}${s.error ? ` · <span class="warn-text">${esc(s.error)}</span>` : ''}
+      ${ws.cloud.sheetUrl ? ` · <a href="${esc(ws.cloud.sheetUrl)}" target="_blank" rel="noopener">Open the Google Sheet ↗</a>` : ''}</p>
       <label class="field"><span>Team link — send this to your team (anyone with it can view and edit this project)</span>
       <div class="share-box"><input id="shareLink" readonly value="${esc(link)}"><button class="btn primary" id="copyLink">Copy</button></div></label>
-      <div class="row gap wrap mt"><button class="btn" id="resyncBtn">Reload from cloud</button><button class="btn danger" id="unlinkBtn">Stop syncing on this device</button></div>`;
+      <div class="row gap wrap mt"><button class="btn" id="resyncBtn">Reload from Google Sheet</button><button class="btn danger" id="unlinkBtn">Stop syncing on this device</button></div>`;
     return;
   }
-  const saved = LS.get('cloud', {}) || {};
+  const saved = LS.get('gsheet', {}) || {};
   body.innerHTML = `
     <p>Right now this project lives <b>only in this browser</b>. Anyone else who opens the app gets their <b>own separate projects</b> — their scans never mix with yours.</p>
-    <p>Want a team to see the <b>same</b> live trays (like a shared Excel, but without anyone breaking formulas)? Connect a free Supabase project once, then share the team link:</p>
+    <p>To let a team work on the <b>same</b> project live, connect a <b>Google Sheet in your own Google Drive</b> (free with any Gmail account; you own the data and can open it like Excel). One-time setup, about 5 minutes:</p>
     <ol class="steps small">
-      <li>Create a free project at <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a>.</li>
-      <li>Open <b>SQL Editor</b>, paste <a href="supabase/schema.sql" target="_blank">supabase/schema.sql</a>, click <b>Run</b>.</li>
-      <li>From <b>Project Settings → API</b>, paste the Project URL and the <b>anon public</b> key below.</li>
+      <li>Create a new Google Sheet: <a href="https://sheet.new" target="_blank" rel="noopener">sheet.new ↗</a> (name it e.g. “DDR Tray Scanner Data”).</li>
+      <li>In the sheet: <b>Extensions → Apps Script</b>. Delete the code there, then <button class="btn small" id="copyScriptBtn">Copy setup script</button> and paste it in. Click 💾 <b>Save</b>.</li>
+      <li><b>Deploy → New deployment</b> → ⚙ <b>Web app</b>. Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b> → <b>Deploy</b> → <b>Authorize access</b> (pick your account → <i>Advanced</i> → <i>Go to … (unsafe)</i> → <i>Allow</i> — this is your own script).</li>
+      <li>Copy the <b>Web app URL</b> and paste it here:</li>
     </ol>
     <div class="row gap wrap">
-      <label class="field" style="flex:1 1 260px"><span>Project URL</span><input id="sbUrl" placeholder="https://xxxx.supabase.co" value="${esc(saved.url || '')}"></label>
-      <label class="field" style="flex:2 1 320px"><span>anon public key</span><input id="sbKey" placeholder="eyJhbGciOi…" value="${esc(saved.key || '')}"></label>
+      <label class="field" style="flex:1 1 420px"><span>Web app URL</span><input id="gsUrl" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(saved.url || '')}"></label>
     </div>
-    <div class="row gap wrap mt"><button class="btn primary" id="shareBtn">Share this project with my team</button></div>
-    <p class="muted small mt">Got a team link from someone? Just open it — or paste it via the project menu (top right) → “Join with a team link”.</p>`;
+    <div class="row gap wrap mt"><button class="btn primary" id="shareBtn">Connect &amp; share this project</button></div>
+    <p class="muted small mt">The copied script contains this device's private secret, so only this app can use your sheet. The same sheet can hold many projects. Got a team link from someone? Just open it — or use the project menu (top right) → “Join with a team link”.</p>`;
 }
 
 // ------------------------------------------------------------ workspaces ----
@@ -761,7 +791,7 @@ async function openWorkspace(id) {
 
 async function startSync() {
   const ws = state.ws;
-  const sync = new CloudSync({
+  const sync = new SheetSync({
     url: ws.cloud.url,
     key: ws.cloud.key,
     wsId: ws.id,
@@ -779,15 +809,19 @@ async function startSync() {
   let ok = true;
   try {
     await sync.init();
-    await pullFromCloud(sync, true);
+    if (sync.sheetUrl && ws.cloud && ws.cloud.sheetUrl !== sync.sheetUrl) {
+      ws.cloud.sheetUrl = sync.sheetUrl;
+      await db.putWorkspace(ws);
+    }
+    await pullFromCloud(sync, !ws.joined);
   } catch (e) {
     ok = false;
     sync.lastError = e.message;
     state.syncStatus = { state: navigator.onLine ? 'error' : 'offline', error: e.message };
     renderSyncPill();
-    toast('Could not reach the team database — working offline. Changes will upload later.', 5000);
+    toast('Could not reach the team Google Sheet — working offline. Scans are saved on this device and will upload later.', 5000);
   }
-  if (state.sync === sync && sync.client) {
+  if (state.sync === sync) {
     sync.subscribe();
     sync.flush();
   }
@@ -798,7 +832,7 @@ async function pullFromCloud(sync, publishIfMissing) {
   const ws = state.ws;
   const remote = await sync.fetchWorkspace();
   if (!remote) {
-    if (!publishIfMissing) throw new Error('Workspace not found in the team database');
+    if (!publishIfMissing) throw new Error('Project not found in the Google Sheet');
     await sync.publish(ws, state.scans);
   } else {
     ws.name = remote.name;
@@ -854,19 +888,20 @@ async function joinTeam(info) {
   if (!ws) {
     ws = newWorkspace(info.name);
     ws.id = info.wsId;
+    ws.joined = true; // never publish a blank project over the team's copy
     ws.cloud = { url: info.url, key: info.key };
     await db.putWorkspace(ws);
   } else if (!ws.cloud) {
     ws.cloud = { url: info.url, key: info.key };
     await db.putWorkspace(ws);
   }
-  LS.set('cloud', { url: info.url, key: info.key });
+  LS.set('gsheet', { url: info.url, key: info.key });
   await openWorkspace(ws.id);
   toast(`Joined “${info.name}”`);
 }
 
 async function newProjectWizard() {
-  const saved = LS.get('cloud', {}) || {};
+  const saved = LS.get('gsheet', {}) || {};
   const canShare = !!(saved.url && saved.key);
   const res = await dialog({
     title: 'New project',
@@ -880,7 +915,7 @@ async function newProjectWizard() {
           <label class="field"><span>Sticks per tray</span><input id="npCap" type="number" min="1" max="1000" value="50"></label>
           <label class="check"><input id="npNoLimit" type="checkbox"> No limit</label>
         </div>
-        ${canShare ? '<label class="check mt"><input id="npShare" type="checkbox" checked> Share live with my team (uses your saved team database)</label>' : ''}
+        ${canShare ? '<label class="check mt"><input id="npShare" type="checkbox" checked> Share live with my team (uses your connected Google Sheet)</label>' : ''}
         <p class="small muted mt" id="npPreview"></p>
       </div>`,
     actions: [{ label: 'Cancel', value: 'cancel' }, { label: 'Create project', value: 'ok', cls: 'primary' }],
@@ -928,7 +963,7 @@ async function newProjectWizard() {
     state.syncStatus = null;
     await db.putWorkspace(state.ws);
     render();
-    toast('Project created, but the team database could not be reached — it is saved on this device only for now.', 7000);
+    toast('Project created, but the Google Sheet could not be reached — it is saved on this device only for now.', 7000);
     return;
   }
   toast(`Project “${v.name}” created with ${v.members.length} member${v.members.length === 1 ? '' : 's'}`);
@@ -954,7 +989,7 @@ function renderStorageInfo() {
     <ul class="steps small">
       <li><b>Every scan is saved instantly</b> to this browser's built-in database (IndexedDB) on this device — before the tray number even appears. Closing the tab, the browser, a crash or a power cut loses nothing: open the same link on the same device and browser and everything is back.</li>
       <li>Browser storage protection: ${persisted ? '<b style="color:var(--good)">ON</b> — the browser will not auto-delete this data.' : persisted === false ? '<b>not granted</b> by this browser (data is still saved; keep regular backups).' : 'unknown in this browser.'}</li>
-      <li>${state.ws.cloud ? '<b>Team project:</b> every scan is also uploaded to your team database, so it is safe even if this device is lost, and other members see it live.' : '<b>Only on this device.</b> Data is lost if you clear browsing data, use a private/incognito window, or switch to another device/browser.'}</li>
+      <li>${state.ws.cloud ? '<b>Team project:</b> every scan is also uploaded to your team’s Google Sheet, so it is safe even if this device is lost, and other members see it live.' : '<b>Only on this device.</b> Data is lost if you clear browsing data, use a private/incognito window, or switch to another device/browser.'}</li>
       <li>Last backup of this project: <b>${last ? (days === 0 ? 'today' : days + ' day(s) ago') : 'never'}</b>. ${!state.ws.cloud ? 'Use “Download backup” or “Export Excel” below at the end of each day.' : ''}</li>
     </ul>`;
 }
@@ -1305,7 +1340,7 @@ function bind() {
     toast('All scans deleted');
   });
   $('#deleteWsBtn').addEventListener('click', async () => {
-    if (!confirm(`Remove “${state.ws.name}” from this device?${state.ws.cloud ? ' The team copy stays in the cloud; you can re-join with the link.' : ' Download a backup first if you need the data.'}`)) return;
+    if (!confirm(`Remove “${state.ws.name}” from this device?${state.ws.cloud ? ' The team copy stays in the Google Sheet; you can re-join with the link.' : ' Download a backup first if you need the data.'}`)) return;
     const id = state.ws.id;
     if (state.sync) state.sync.close(), (state.sync = null);
     await db.deleteWorkspace(id);
@@ -1325,13 +1360,13 @@ function bind() {
       }
       toast('Team link copied');
     } else if (id === 'shareBtn') {
-      const url = $('#sbUrl').value.trim().replace(/\/+$/, '');
-      const key = $('#sbKey').value.trim();
-      if (!/^https:\/\/.+/.test(url) || key.length < 20) return toast('Enter the Supabase Project URL and anon key');
-      LS.set('cloud', { url, key });
+      const url = $('#gsUrl').value.trim();
+      if (!/^https:\/\/script\.google(usercontent)?\.com\/.+/.test(url)) return toast('Paste the Web app URL (it starts with https://script.google.com/macros/s/…)', 6000);
+      const saved = LS.get('gsheet', {}) || {};
+      const key = saved.url === url && saved.key ? saved.key : gsheetSecret();
       state.ws.cloud = { url, key };
       await db.putWorkspace(state.ws);
-      toast('Uploading workspace…', 8000);
+      toast('Connecting to your Google Sheet and uploading…', 10000);
       const ok = await startSync();
       if (!ok) {
         const err = state.syncStatus && state.syncStatus.error;
@@ -1340,16 +1375,19 @@ function bind() {
         state.syncStatus = null;
         await db.putWorkspace(state.ws);
         render();
-        toast('Could not connect: ' + (err || 'check the URL / key and that schema.sql was run') + '. Nothing was shared.', 9000);
+        toast('Could not connect: ' + (err || 'check the Web app URL') + '. Make sure you pasted the copied script and set access to “Anyone”. Nothing was shared.', 10000);
         return;
       }
+      LS.set('gsheet', { url, key });
       render();
       toast('Shared! Copy the team link and send it to your team.', 5000);
+    } else if (id === 'copyScriptBtn') {
+      await copySetupScript();
     } else if (id === 'resyncBtn') {
       if (!state.sync) return;
       try {
         await pullFromCloud(state.sync, false);
-        toast('Reloaded from cloud');
+        toast('Reloaded from the Google Sheet');
       } catch (err) {
         toast(err.message, 5000);
       }

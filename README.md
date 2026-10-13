@@ -34,7 +34,7 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 ## Where is the data saved?
 
 - **On the device, instantly.** Every scan is written to the browser's built-in database (IndexedDB) *before* the tray number appears. If the tab or browser is closed by accident, the PC crashes or the power goes, nothing is lost: open the same link on the same device and browser and it's all there. The app also asks the browser to mark the data as *persistent* so it isn't cleaned up automatically. **Settings → Where is my data saved?** shows the status.
-- It is lost only if someone clears the browser's site data, uses a private/incognito window, or moves to a different device or browser. To protect against that, use **Export Excel** or **Download backup** at the end of the day, or use a team project (below), which also stores every scan in the cloud.
+- It is lost only if someone clears the browser's site data, uses a private/incognito window, or moves to a different device or browser. To protect against that, use **Export Excel** or **Download backup** at the end of the day, or use a team project (below), which also stores every scan in your own Google Sheet.
 
 ## Put it online (free, about 2 minutes)
 
@@ -47,25 +47,35 @@ Share that link with anyone. Each person gets their own project and nobody's sca
 
 > Run it locally instead: `python3 -m http.server 8080` in this folder, then open http://localhost:8080.
 
-## Optional: one live project for a whole team (free)
+## Optional: one live project for a whole team, in your own Google Sheet (free)
 
-Use this when several scanner stations should feed **one** Master Summary live, like the shared Excel but without anyone breaking formulas.
+Use this when several people should feed **one** Tray Summary live, like the shared Excel but without anyone breaking formulas. The shared copy lives in a **Google Sheet in your own Google Drive**. You own it, you can open it like Excel at any time, and no extra service or account is needed beyond a normal Gmail account.
 
-1. Create a free project at [supabase.com](https://supabase.com). No credit card is needed.
-2. In the project, open **SQL Editor → New query**, paste all of [`supabase/schema.sql`](supabase/schema.sql), and click **Run**.
-3. Open **Project Settings → API** and copy the **Project URL** and the **anon public** key.
-4. In the app, go to **Settings → Team sharing**, paste both values, and click **Share this project with my team**.
-5. Copy the **team link** and send it to your team. Opening it asks them to join, and from then on everyone sees the same trays in real time.
+1. In the app, open **Settings → Team sharing** and click **Copy setup script**. The script already contains your private secret.
+2. Create a Google Sheet at [sheet.new](https://sheet.new), then open **Extensions → Apps Script**. Delete the code that's there, paste the script, and click **Save**.
+3. Click **Deploy → New deployment → ⚙ Web app**. Set **Execute as: Me** and **Who has access: Anyone**, then click **Deploy**. Authorize it: pick your account → *Advanced* → *Go to … (unsafe)* → *Allow*. Google shows that warning for any script you write yourself.
+4. Copy the **Web app URL**, paste it into the app, and click **Connect & share this project**.
+5. Copy the **team link** and send it to your team. Opening it asks them to join.
 
 How it behaves:
 
-- Each device keeps a full local copy. If Wi-Fi drops, scanning keeps working and changes upload automatically when the connection returns. The badge in the top bar shows **Live / Syncing / Offline**.
-- Each station has its own tray range, so two stations never compete for the same tray.
-- The free Supabase tier (500 MB database) holds millions of scans. A free project pauses after a week with no activity; click **Restore** in the Supabase dashboard to wake it.
+- **Every scan is saved on the scanning device first**, then uploaded. If the internet or Google is down, scanning keeps working, changes queue up, and they upload automatically later. The top bar shows **Live / Syncing / Offline**.
+- Other members' scans show up within about 8 seconds (about 60 seconds when the app is in the background).
+- Each member scans into their own tray range, so nobody collides. Duplicate serial numbers are caught across all devices.
+- Your Google Sheet gets three tabs: **Scans** (one readable row per scan: tray, part, brand, gen, serial, status, operator…), **Projects**, and **Log** (the change history the app syncs from; don't edit it by hand). One sheet can hold many projects.
+- Capacity: a Google Sheet holds 10 million cells, which is roughly 400,000 scans. When it gets full, create a new sheet for new projects.
+
+### Why Google Sheet and not a database service
+
+No outside company can promise "free forever", and that includes Google. This design is built so a rule change can't cost you data:
+
+1. Every device keeps a full copy of its projects, and the app never depends on the cloud to work.
+2. The shared copy is an ordinary spreadsheet file **you own**. You can download it (File → Download → .xlsx) whenever you like, and nothing is locked inside a vendor's database.
+3. The sync script is under 200 lines of plain code in `gsheet/Code.gs` and could be moved to another backend if ever needed.
 
 ### Security
 
-The team link contains the project ID and the Supabase *anon* key, which is meant to be public. **Anyone with the team link can view and edit that project**, so share it the way you would share an edit link to a Google Sheet. The project ID is a random 16-character code that nobody can guess. For stricter control (named logins), turn on Supabase Auth and replace the two `using (true)` policies in `schema.sql` with per-user rules.
+The team link contains the Web app URL and the secret. **Anyone with the team link can view and edit that project**, so share it the way you'd share an edit link to a Google Sheet. Requests without the secret are refused. To lock everyone out, open Apps Script and click **Deploy → Manage deployments → Archive** (or change the secret and redeploy). The Google Sheet itself stays private to your Google account unless you share it.
 
 Local (non-team) projects never leave the browser.
 
@@ -96,14 +106,15 @@ No build step. The code is ES modules in `js/`, with third-party libraries bundl
 | `js/parser.js` | scan → part / brand / gen / label / serial |
 | `js/trays.js` | tray placement, the summary, and range checks (pure functions) |
 | `js/store.js` | IndexedDB persistence and the sync outbox |
-| `js/sync.js` | optional Supabase team sync (offline-first outbox and realtime) |
+| `js/sync.js` | optional team sync through your Google Sheet (offline-first outbox + polling) |
+| `gsheet/Code.gs` | the Apps Script that runs inside your Google Sheet |
 | `js/excel.js` | Excel import/export (SheetJS) and CSV |
 | `js/app.js` | UI |
 | `sw.js` | offline cache |
 
 Run the tests with `npm test` (Node 18+; there are no dependencies to install).
 
-Bundled libraries: [SheetJS](https://sheetjs.com) 0.18.5 (Apache-2.0), [html5-qrcode](https://github.com/mebjas/html5-qrcode) 2.3.8 (Apache-2.0), [supabase-js](https://github.com/supabase/supabase-js) 2.45.4 (MIT). Their licenses are in `vendor/`.
+Bundled libraries: [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) 1.2.0 (SheetJS with cell styles, Apache-2.0), [html5-qrcode](https://github.com/mebjas/html5-qrcode) 2.3.8 (Apache-2.0). Their licenses are in `vendor/`.
 
 ## License
 

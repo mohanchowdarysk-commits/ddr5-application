@@ -1,7 +1,7 @@
 // Offline support: network first (so updates arrive immediately), falling
 // back to the cached copy when the network is unavailable.
-const CACHE = 'ddr-tray-scanner-v2';
-const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/parser.js', 'js/trays.js', 'js/store.js', 'js/sync.js', 'js/excel.js', 'js/defaults.js', 'js/load.js', 'vendor/xlsx-js-style.min.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'ddr-tray-scanner-v3';
+const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/parser.js', 'js/trays.js', 'js/store.js', 'js/sync.js', 'js/excel.js', 'js/defaults.js', 'js/load.js', 'vendor/xlsx-js-style.min.js', 'gsheet/Code.gs', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
