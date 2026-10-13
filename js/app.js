@@ -3,7 +3,6 @@ import { makePlacer, traySummary, groupCount, rangeProblems, isBlankSerial, capO
 import { newWorkspace, uid, shortId, stationsForMembers } from './defaults.js';
 import * as db from './store.js';
 import { SheetSync, makeJoinLink, readJoinLink, scanToRow, rowToScan, setupScript } from './sync.js';
-import { loadScript } from './load.js';
 import { exportWorkbook, readScansFromWorkbook, downloadText, scansToCsv, fmtTime, STATUS_TEXT } from './excel.js';
 
 // ---------------------------------------------------------------- state ----
@@ -1093,37 +1092,137 @@ async function restore(file) {
 
 // --------------------------------------------------------------- camera ----
 
-let camera = null;
+let cam = null;
+
+function camStatus(html, kind = '') {
+  const el = $('#camStatus');
+  el.className = 'cam-status' + (kind ? ' ' + kind : '');
+  el.innerHTML = html;
+}
+
+function appLink() {
+  return location.href.split('#')[0].replace(/^http:/, 'https:');
+}
+
+function cameraHelp(kind, err) {
+  const copy = `<button type="button" class="btn small" data-cam="copylink">Copy app link</button>`;
+  const photo = 'Or use <b>📸 Photo</b> instead — it works in almost every browser.';
+  const msg = {
+    insecure: `The camera only works on the secure link. Open <b>${esc(appLink())}</b>. ${copy}`,
+    inapp: `This page is open <b>inside another app</b> (WhatsApp, Instagram, Gmail…), which blocks the camera. Open it in the real browser: tap <b>⋮</b> or <b>Share</b> → <b>Open in Chrome</b> (Android) or <b>Open in Safari</b> (iPhone). ${copy}<br>${photo}`,
+    unsupported: `This browser can't use the camera. Please open the link in <b>Chrome</b> (Android/PC) or <b>Safari</b> (iPhone). ${copy}<br>${photo}`,
+    denied: `Camera permission is <b>blocked</b> for this site. Allow it, then press 📷 Camera again:
+      <ol><li><b>Android Chrome:</b> tap the icon left of the web address → <b>Permissions</b> → <b>Camera</b> → <b>Allow</b>.</li>
+      <li><b>iPhone Safari:</b> tap <b>aA</b> in the address bar → <b>Website Settings</b> → <b>Camera</b> → <b>Allow</b>. (Also check Settings → Safari → Camera.)</li>
+      <li><b>PC Chrome/Edge:</b> click the 🔒 icon left of the address → <b>Camera</b> → <b>Allow</b>, then reload.</li></ol>${photo}`,
+    nocamera: `No camera was found on this device. ${photo}`,
+    busy: `The camera is being used by another app or tab (video call, another scanner page). Close it and try again. ${photo}`,
+    other: `The camera could not start${err ? ': ' + esc(err.message || err) : ''}. ${photo}`,
+  }[kind];
+  camStatus(msg, 'bad');
+}
+
 async function startCamera() {
-  const box = $('#cameraBox');
-  box.hidden = false;
+  $('#cameraBox').hidden = false;
+  if (cam) return;
+  const problem = (await import('./camera.js')).cameraProblem();
+  if (problem) return cameraHelp(problem);
+  camStatus('Starting camera… (allow camera access if your browser asks)');
+  const { CameraScanner, errorKind } = await import('./camera.js');
+  const scanner = new CameraScanner({
+    video: $('#camVideo'),
+    overlay: $('#camOverlay'),
+    rules: state.ws.settings.brandRules,
+    onPick: async (raw, how) => {
+      await handleScan(raw);
+      const r = state.lastResult && state.byId.get(state.lastResult.id);
+      const where = r && r.tray != null ? `Tray <b>${r.tray}</b>` : r ? esc(STATUS_TEXT[r.status] || r.status) : '';
+      camStatus(`✓ Read ${how === 'combined' ? 'part + serial barcodes' : 'label'} → ${where}. Move the label away and show the next one.`, r && r.status === 'placed' ? 'ok' : 'bad');
+    },
+    onStatus: (kind, info) => {
+      if (kind === 'ask') {
+        cam.pending = info;
+        camStatus(`Read <b class="mono">${esc(info.raw)}</b> — ${esc(info.reason)}. If this label has a separate part-number barcode, show it too.<br>
+          <button type="button" class="btn small" data-cam="addanyway">Add anyway</button><button type="button" class="btn small" data-cam="ignore">Ignore</button>`, 'warn');
+      } else if (kind === 'part-only') camStatus('Part number read — looking for the serial barcode…');
+      else if (kind === 'reading') camStatus('Code seen — reading…');
+      else if (kind === 'looking') camStatus(`Point at the label · reader: ${esc(scanner.engine)}`);
+    },
+  });
+  cam = scanner;
   try {
-    await loadScript('vendor/html5-qrcode.min.js', 'Html5Qrcode');
-    camera = new window.Html5Qrcode('cameraReader');
-    let last = '';
-    let lastAt = 0;
-    await camera.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 260, height: 180 } }, (text) => {
-      const now = Date.now();
-      if (text === last && now - lastAt < 2500) return; // ignore the same code held in view
-      last = text;
-      lastAt = now;
-      handleScan(text);
-    });
+    const engine = await scanner.start(LS.get('camId') || undefined);
+    if (cam !== scanner) return scanner.stop();
+    camStatus(`Point at the label · reader: ${esc(engine)}`);
+    await setupCamControls(scanner);
   } catch (e) {
-    toast('Camera unavailable: ' + (e.message || e), 5000);
-    stopCamera();
+    scanner.stop();
+    cam = null;
+    cameraHelp(errorKind(e), e);
   }
 }
-async function stopCamera() {
+
+async function setupCamControls(scanner) {
+  const list = await scanner.cameras();
+  const sel = $('#camSelect');
+  const current = scanner.settings().deviceId;
+  if (list.length > 1) {
+    sel.innerHTML = list.map((d, i) => `<option value="${esc(d.deviceId)}" ${d.deviceId === current ? 'selected' : ''}>${esc(d.label || 'Camera ' + (i + 1))}</option>`).join('');
+    sel.hidden = false;
+  } else sel.hidden = true;
+  const caps = scanner.capabilities();
+  const zoom = $('#camZoom');
+  if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+    zoom.min = caps.zoom.min;
+    zoom.max = caps.zoom.max;
+    zoom.step = caps.zoom.step || 0.1;
+    zoom.value = scanner.settings().zoom || caps.zoom.min;
+    $('#camZoomWrap').hidden = false;
+  } else $('#camZoomWrap').hidden = true;
+  $('#camTorch').hidden = !caps.torch;
+}
+
+function stopCamera() {
   $('#cameraBox').hidden = true;
-  if (camera) {
-    try {
-      await camera.stop();
-    } catch {
-      /* already stopped */
-    }
-    camera = null;
+  if (cam) {
+    cam.stop();
+    cam = null;
   }
+  $('#camTorch').dataset.on = '';
+}
+
+async function scanPhoto(file) {
+  toast('Reading the photo…', 8000);
+  let codes;
+  try {
+    codes = await (await import('./camera.js')).decodePhoto(file);
+  } catch (e) {
+    return toast('Could not read the photo: ' + (e.message || e), 6000);
+  }
+  if (!codes.length) {
+    return toast('No barcode or QR code found. Fill the frame with the label, keep it sharp and well lit, and try again.', 7000);
+  }
+  const { pickCodes } = await import('./codepick.js');
+  const d = pickCodes(codes, { rules: state.ws.settings.brandRules, aloneMs: Infinity });
+  if (d.action === 'add') {
+    $('#toast').hidden = true;
+    return handleScan(d.raw);
+  }
+  const res = await dialog({
+    title: 'Which code should be added?',
+    body: `<p class="small muted">${esc(d.reason)}. Codes found in the photo:</p>` +
+      codes.map((c, i) => `<p><button type="button" class="btn small" data-pick="${i}">Add</button> <span class="mono">${esc(c)}</span></p>`).join(''),
+    actions: [{ label: 'Cancel', value: 'cancel' }],
+    bind(root) {
+      root.addEventListener('click', (e) => {
+        const i = e.target.dataset && e.target.dataset.pick;
+        if (i == null) return;
+        dialog.picked = codes[Number(i)];
+        root.closest('dialog').close('pick');
+      });
+    },
+  });
+  if (res === 'pick' && dialog.picked) await handleScan(dialog.picked);
 }
 
 // --------------------------------------------------------------- events ----
@@ -1192,6 +1291,42 @@ function bind() {
   });
   $('#cameraBtn').addEventListener('click', startCamera);
   $('#cameraStop').addEventListener('click', stopCamera);
+  $('#photoInput').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) scanPhoto(f);
+  });
+  $('#camWrap').addEventListener('click', () => cam && cam.refocus());
+  $('#camSelect').addEventListener('change', async (e) => {
+    LS.set('camId', e.target.value);
+    stopCamera();
+    await startCamera();
+  });
+  $('#camZoom').addEventListener('input', (e) => cam && cam.setZoom(Number(e.target.value)));
+  $('#camTorch').addEventListener('click', (e) => {
+    if (!cam) return;
+    const on = !e.target.dataset.on;
+    e.target.dataset.on = on ? '1' : '';
+    e.target.classList.toggle('primary', on);
+    cam.setTorch(on);
+  });
+  $('#camStatus').addEventListener('click', async (e) => {
+    const act = e.target.dataset && e.target.dataset.cam;
+    if (act === 'copylink') {
+      try {
+        await navigator.clipboard.writeText(appLink());
+        toast('Link copied — paste it into Chrome or Safari');
+      } catch {
+        prompt('Copy this link and open it in Chrome or Safari:', appLink());
+      }
+    } else if (cam && cam.pending && (act === 'addanyway' || act === 'ignore')) {
+      const p = cam.pending;
+      cam.pending = null;
+      cam.dismiss(p.codes);
+      camStatus('Point at the label');
+      if (act === 'addanyway') await handleScan(p.raw);
+    }
+  });
 
   document.addEventListener('click', (e) => {
     const ed = e.target.closest('[data-edit]');

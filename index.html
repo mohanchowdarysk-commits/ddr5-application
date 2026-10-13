@@ -48,11 +48,23 @@
         <label for="scanInput" class="sr-only">Scan input</label>
         <input id="scanInput" class="scan-box" placeholder="Scan barcode / QR here (or type + Enter)" spellcheck="false" autocapitalize="off" autocomplete="off" enterkeyhint="go">
         <button type="submit" class="btn primary">Add</button>
-        <button type="button" id="cameraBtn" class="btn" title="Scan with this device's camera">📷 Camera</button>
+        <button type="button" id="cameraBtn" class="btn" title="Scan live with this device's camera">📷 Camera</button>
+        <label class="btn file-btn" title="Take a sharp photo of the label with your camera app — best for tiny labels">📸 Photo<input type="file" id="photoInput" accept="image/*" capture="environment" hidden></label>
       </form>
       <div id="cameraBox" class="card camera" hidden>
-        <div id="cameraReader"></div>
-        <button type="button" id="cameraStop" class="btn">Stop camera</button>
+        <div class="cam-wrap" id="camWrap">
+          <video id="camVideo" playsinline muted></video>
+          <canvas id="camOverlay"></canvas>
+          <div class="cam-guide" aria-hidden="true"></div>
+        </div>
+        <div id="camStatus" class="cam-status" aria-live="polite">Starting camera…</div>
+        <div class="row gap wrap cam-controls">
+          <select id="camSelect" hidden aria-label="Choose camera"></select>
+          <label id="camZoomWrap" class="cam-zoom" hidden>🔍 Zoom <input id="camZoom" type="range" step="0.1"></label>
+          <button type="button" id="camTorch" class="btn" hidden>🔦 Light</button>
+          <button type="button" id="cameraStop" class="btn">Stop camera</button>
+        </div>
+        <p class="muted small cam-tips">Tips: hold the label 8–15 cm away inside the box, keep it flat and well lit, tap the picture to refocus. If a label has separate part-number and serial barcodes, show both at once. For tiny labels, 📸 Photo is the most reliable.</p>
       </div>
 
       <div id="result" class="result card idle" aria-live="assertive">

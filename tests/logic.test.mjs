@@ -120,3 +120,26 @@ test('members get consecutive tray ranges', async () => {
   assert.deepEqual(st.map((s) => [s.name, s.operator, s.trayStart, s.trayEnd]), [['Ashu', 'Ashu', 1, 40], ['Ronny', 'Ronny', 41, 80]]);
   assert.deepEqual(rangeProblems(st), []);
 });
+
+test('camera: picking which code(s) on a label to use', async () => {
+  const { pickCodes, looksLikePart } = await import('../js/codepick.js');
+  assert.equal(looksLikePart('M393A2K43DB2-CTD'), true);
+  assert.equal(looksLikePart('S12345678'), false);
+  assert.equal(looksLikePart('KSM32RD8/16HDR'), true);
+  // tagged QR wins even if other codes are visible
+  assert.deepEqual(pickCodes(['S999', '(L)16GB (S)S1 (P)M393A2K43DB2-CTD']), { action: 'add', raw: '(L)16GB (S)S1 (P)M393A2K43DB2-CTD', how: 'tagged' });
+  // separate part + serial barcodes are combined
+  const c = pickCodes(['M393A2K43DB2-CTD', '3829ABCD1234']);
+  assert.equal(c.action, 'add');
+  assert.equal(c.raw, '(S)3829ABCD1234 (P)M393A2K43DB2-CTD');
+  // free text code
+  assert.equal(pickCodes(['M393A2K43DB2-CTD 16GB 2Rx8']).raw, 'M393A2K43DB2-CTD 16GB 2Rx8');
+  // part alone waits briefly for a serial, then adds
+  assert.equal(pickCodes(['HMA84GR7CJR4N-VK']).action, 'wait');
+  assert.equal(pickCodes(['HMA84GR7CJR4N-VK'], { aloneMs: 1000 }).action, 'add');
+  // serial alone never gets added as a part number on its own
+  assert.equal(pickCodes(['3829ABCD1234']).action, 'wait');
+  assert.equal(pickCodes(['3829ABCD1234'], { aloneMs: 2000 }).action, 'ask');
+  // two different parts in view
+  assert.equal(pickCodes(['M393A2K43DB2-CTD', 'HMA84GR7CJR4N-VK']).action, 'ask');
+});

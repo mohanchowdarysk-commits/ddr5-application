@@ -150,7 +150,20 @@ textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; f
 .station-meta { color: var(--muted); }
 .scan-input { display: flex; gap: 8px; flex-wrap: wrap; }
 .scan-box { flex: 1 1 320px; font-size: 18px; padding: 12px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; }
-.camera #cameraReader { max-width: 480px; margin-bottom: 8px; }
+.camera { display: flex; flex-direction: column; gap: 10px; }
+.cam-wrap { position: relative; width: 100%; max-width: 640px; background: #000; border-radius: 8px; overflow: hidden; cursor: crosshair; }
+.cam-wrap video, .cam-wrap canvas { display: block; width: 100%; height: auto; }
+.cam-wrap canvas { position: absolute; inset: 0; height: 100%; pointer-events: none; }
+.cam-guide { position: absolute; left: 8%; top: 12%; width: 84%; height: 76%; border: 2px dashed rgb(255 255 255 / 75%); border-radius: 10px; box-shadow: 0 0 0 999px rgb(0 0 0 / 28%); pointer-events: none; }
+.cam-status { font-size: 15px; font-weight: 600; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.cam-status.ok { color: var(--good); background: var(--good-bg); }
+.cam-status.warn { color: var(--warn); background: var(--warn-bg); }
+.cam-status.bad { color: var(--bad); background: var(--bad-bg); font-weight: 500; }
+.cam-status .btn { margin: 6px 6px 0 0; }
+.cam-status ol { margin: 6px 0 0 18px; padding: 0; }
+.cam-zoom { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.cam-zoom input { width: 140px; }
+.cam-tips { margin: 0; }
 
 .result { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; border-width: 2px; }
 .result-main { flex: 1 1 260px; }

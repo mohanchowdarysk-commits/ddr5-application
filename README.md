@@ -21,7 +21,7 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 
 ### Features
 
-- **Scan tab**: pick your station, then scan. You get a huge tray number, a fill bar (`12 / 50`), and a different beep for *add to tray*, *new tray* and *problem*. It can also speak "Tray 37". **Undo last** (Ctrl+Z) and **Bulk paste** (paste a column from Excel). Keystrokes from a USB/Bluetooth scanner are captured even when the box isn't focused. A phone or tablet camera can scan QR codes and barcodes too.
+- **Scan tab**: pick your station, then scan. You get a huge tray number, a fill bar (`12 / 50`), and a different beep for *add to tray*, *new tray* and *problem*. It can also speak "Tray 37". **Undo last** (Ctrl+Z) and **Bulk paste** (paste a column from Excel). Keystrokes from a USB/Bluetooth scanner are captured even when the box isn't focused. **📷 Camera** scans QR codes, Data Matrix and barcodes live. It uses the phone's built-in barcode reader when there is one, otherwise ZXing-C++ (bundled, works offline), and combines separate part-number and serial barcodes on the same label. **📸 Photo** reads a sharp photo from the phone's camera app, which is the most reliable way to read tiny labels. If the camera is blocked, the app explains why (permission, or a link opened inside WhatsApp or Instagram) and how to fix it.
 - **Trays tab** (the workbook's Master Summary): a live card or table view of all 1,300 trays, filtered by station, brand, gen or fill state. Mixed-part trays are flagged. Click a tray to see every serial in it, remove a stick, download the list, or **mark it shipped**, which frees the tray number for reuse and keeps the history.
 - **Find tab**: type or scan a part number or serial number to see which tray(s) hold it.
 - **Dashboard**: sticks by brand, generation and station, the top part numbers, scans today, and what needs attention.
@@ -114,7 +114,7 @@ No build step. The code is ES modules in `js/`, with third-party libraries bundl
 
 Run the tests with `npm test` (Node 18+; there are no dependencies to install).
 
-Bundled libraries: [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) 1.2.0 (SheetJS with cell styles, Apache-2.0), [html5-qrcode](https://github.com/mebjas/html5-qrcode) 2.3.8 (Apache-2.0). Their licenses are in `vendor/`.
+Bundled libraries: [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) 1.2.0 (SheetJS with cell styles, Apache-2.0), [barcode-detector](https://github.com/Sec-ant/barcode-detector) 3.2.2 + [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) 3.1.3 (MIT). Their licenses are in `vendor/`.
 
 ## License
 
