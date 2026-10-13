@@ -11,6 +11,13 @@
 
 export const DEFAULT_CAPACITY = 50;
 
+// Sticks per tray for a project. 0 means "no limit" (one tray per part number).
+export function capOf(settings) {
+  const c = settings ? settings.capacity : undefined;
+  if (c === 0) return Infinity;
+  return c > 0 ? c : DEFAULT_CAPACITY;
+}
+
 export function isBlankSerial(s) {
   return !s || s === '—' || s === '-';
 }
@@ -46,7 +53,7 @@ export function serialSet(scans) {
 // Incremental placer: build once from the current scans, then place many
 // scans in order (bulk paste / Excel import) without rescanning the list.
 export function makePlacer(scans, settings = {}) {
-  const capacity = settings.capacity || DEFAULT_CAPACITY;
+  const capacity = capOf(settings);
   const occ = occupancy(scans, null);
   const serials = new Map();
   const seen = new Set();

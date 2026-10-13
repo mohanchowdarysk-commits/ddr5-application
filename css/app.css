@@ -254,6 +254,8 @@ dialog::backdrop { background: rgb(0 0 0 / 40%); }
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50;
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 14px; max-width: calc(100vw - 32px);
 }
+.wizard { display: flex; flex-direction: column; gap: 10px; }
+.wizard textarea { font-family: inherit; font-size: 14px; }
 .ws-list { display: flex; flex-direction: column; gap: 6px; }
 .ws-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .ws-item.current { border-color: var(--accent); }

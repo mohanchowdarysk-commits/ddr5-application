@@ -101,3 +101,22 @@ test('tray summary and range checks', () => {
   assert.equal(rows[1].state, 'empty');
   assert.deepEqual(rangeProblems([st1, { id: 'x', name: 'X', trayStart: 3, trayEnd: 9 }]), ['S1 and X overlap']);
 });
+
+test('no tray limit (capacity 0): one tray per part number', async () => {
+  const { capOf } = await import('../js/trays.js');
+  assert.equal(capOf({ capacity: 0 }), Infinity);
+  assert.equal(capOf({}), 50);
+  const lines = Array.from({ length: 120 }, (_, i) => `(S)n${i} (P)${i % 2 ? 'AAA' : 'BBB'}`);
+  const scans = run(lines, st1, { capacity: 0 });
+  assert.deepEqual([...new Set(scans.map((s) => s.tray))].sort(), [1, 2]);
+  assert.ok(scans.every((s) => s.status === 'placed'));
+  const rows = traySummary(scans, [st1], Infinity);
+  assert.deepEqual(rows.map((r) => r.state), ['partial', 'partial', 'empty']);
+});
+
+test('members get consecutive tray ranges', async () => {
+  const { stationsForMembers } = await import('../js/defaults.js');
+  const st = stationsForMembers(['Ashu', 'Ronny'], 40);
+  assert.deepEqual(st.map((s) => [s.name, s.operator, s.trayStart, s.trayEnd]), [['Ashu', 'Ashu', 1, 40], ['Ronny', 'Ronny', 41, 80]]);
+  assert.deepEqual(rangeProblems(st), []);
+});

@@ -10,7 +10,7 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 
 | Excel workbook | DDR Tray Scanner |
 |---|---|
-| One shared file; everyone edits the same sheets and can overwrite formulas | Everyone who opens the link gets their **own private workspace**, stored in their browser |
+| One shared file; everyone edits the same sheets and can overwrite formulas | Everyone who opens the link gets their **own private project**, stored in their browser |
 | You have to manage share permissions | Just send the URL. If a team wants one shared live view, they use an optional team link |
 | Trays recalculate when a row is deleted, so sticks already placed can "move" | A tray number is **fixed when the stick is scanned**. Deleting a scan never moves other sticks |
 | "DUPLICATE" only means "same part number" | Real **duplicate serial number** detection across every station |
@@ -26,8 +26,15 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 - **Find tab**: type or scan a part number or serial number to see which tray(s) hold it.
 - **Dashboard**: sticks by brand, generation and station, the top part numbers, scans today, and what needs attention.
 - **Log**: every scan with search and filters. You can edit a note, move a stick to another tray manually, or delete a scan. Exports to **CSV** or **Excel**.
-- **Settings**: stations and tray ranges (the 13 scanners from the workbook are set up by default), sticks per tray (default 50), duplicate-serial policy, and brand rules. You can **import the original Excel workbook**, back up or restore to JSON, and keep several workspaces (one per batch or shift).
+- **Projects**: click the project name (top right) → **+ New project**. Give it a name, list the **members** (one per line), choose **trays per member**, and set **sticks per tray**, or tick **No limit** so every stick of a part number goes into one tray. Each member automatically gets their own tray range (e.g. Ashu 1–100, Ronny 101–200), so two people never fill the same tray. You can keep many projects (one per batch, shipment or customer) and switch between them.
+- **Settings**: rename the project, add/rename members and change tray ranges, the tray limit, the duplicate-serial policy and brand rules. You can **import the original Excel workbook** and back up or restore to JSON.
+- **Colourful Excel export**: a **Tray Summary** that lists only trays that hold sticks (no empty rows), with colour-coded brand, DDR gen and FULL/partial status and a totals row. Also a **Members** sheet (trays used, full trays, sticks, problems per member), **Part Totals** (sticks per part number and the trays they're in), and one sheet per member with every scan. Every sheet has filter buttons.
 - **Offline & installable**: it works without internet after the first visit. On a phone, use "Add to Home Screen".
+
+## Where is the data saved?
+
+- **On the device, instantly.** Every scan is written to the browser's built-in database (IndexedDB) *before* the tray number appears. If the tab or browser is closed by accident, the PC crashes or the power goes, nothing is lost: open the same link on the same device and browser and it's all there. The app also asks the browser to mark the data as *persistent* so it isn't cleaned up automatically. **Settings → Where is my data saved?** shows the status.
+- It is lost only if someone clears the browser's site data, uses a private/incognito window, or moves to a different device or browser. To protect against that, use **Export Excel** or **Download backup** at the end of the day, or use a team project (below), which also stores every scan in the cloud.
 
 ## Put it online (free, about 2 minutes)
 
@@ -36,18 +43,18 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 3. Wait about a minute. Your link appears at the top of that page:
    `https://mohanchowdarysk-commits.github.io/ddr5-application/`
 
-Share that link with anyone. Each person gets their own workspace and nobody's scans mix with anyone else's.
+Share that link with anyone. Each person gets their own project and nobody's scans mix with anyone else's.
 
 > Run it locally instead: `python3 -m http.server 8080` in this folder, then open http://localhost:8080.
 
-## Optional: one live workspace for a whole team (free)
+## Optional: one live project for a whole team (free)
 
 Use this when several scanner stations should feed **one** Master Summary live, like the shared Excel but without anyone breaking formulas.
 
 1. Create a free project at [supabase.com](https://supabase.com). No credit card is needed.
 2. In the project, open **SQL Editor → New query**, paste all of [`supabase/schema.sql`](supabase/schema.sql), and click **Run**.
 3. Open **Project Settings → API** and copy the **Project URL** and the **anon public** key.
-4. In the app, go to **Settings → Team sharing**, paste both values, and click **Share this workspace with my team**.
+4. In the app, go to **Settings → Team sharing**, paste both values, and click **Share this project with my team**.
 5. Copy the **team link** and send it to your team. Opening it asks them to join, and from then on everyone sees the same trays in real time.
 
 How it behaves:
@@ -58,16 +65,16 @@ How it behaves:
 
 ### Security
 
-The team link contains the workspace ID and the Supabase *anon* key, which is meant to be public. **Anyone with the team link can view and edit that workspace**, so share it the way you would share an edit link to a Google Sheet. The workspace ID is a random 16-character code that nobody can guess. For stricter control (named logins), turn on Supabase Auth and replace the two `using (true)` policies in `schema.sql` with per-user rules.
+The team link contains the project ID and the Supabase *anon* key, which is meant to be public. **Anyone with the team link can view and edit that project**, so share it the way you would share an edit link to a Google Sheet. The project ID is a random 16-character code that nobody can guess. For stricter control (named logins), turn on Supabase Auth and replace the two `using (true)` policies in `schema.sql` with per-user rules.
 
-Local (non-team) workspaces never leave the browser.
+Local (non-team) projects never leave the browser.
 
 ## How trays are assigned
 
 For each scan at a station (range `trayStart…trayEnd`, capacity *N*, default 50):
 
 1. **No part number found** → `No part # detected`, not placed.
-2. **Serial number already placed** anywhere in the workspace → `Duplicate serial`, not placed. On screen you can choose *Place anyway* or *Remove*.
+2. **Serial number already placed** anywhere in the project → `Duplicate serial`, not placed. On screen you can choose *Place anyway* or *Remove*.
 3. There is an **open tray in this station's range already holding this part** with fewer than *N* sticks → add it there (the lowest tray number first).
 4. Otherwise → the **lowest empty tray** in the range (`New part → Tray X`, or `Tray full → New Tray X`).
 5. No empty tray left → `All trays full`.

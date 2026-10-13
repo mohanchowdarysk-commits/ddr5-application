@@ -16,7 +16,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true" class="logo"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M5 17v3M9 17v3M13 17v3M17 17v3M6 10h3v4H6zM11 10h3v4h-3zM16 10h2v4h-2z"/></svg>
       <span>DDR Tray Scanner</span>
     </div>
-    <button id="wsButton" class="ws-button" title="Switch workspace"><span id="wsName">…</span> <span aria-hidden="true">▾</span></button>
+    <button id="wsButton" class="ws-button" title="Switch or create a project"><span id="wsName">…</span> <span aria-hidden="true">▾</span></button>
     <span id="syncPill" class="pill" hidden></span>
   </header>
 
@@ -34,7 +34,7 @@
     <section id="view-scan" class="view">
       <div class="scan-controls card">
         <label class="field">
-          <span>Scanner station</span>
+          <span>Member / station</span>
           <select id="stationSelect"></select>
         </label>
         <label class="field">
@@ -147,10 +147,14 @@
     <!-- SETTINGS -->
     <section id="view-settings" class="view" hidden>
       <div class="card">
-        <h2>Workspace</h2>
+        <div class="card-head">
+          <h2>Project</h2>
+          <button id="newProjectBtn2" class="btn">+ New project</button>
+        </div>
         <div class="row gap wrap">
-          <label class="field"><span>Name</span><input id="wsNameInput"></label>
+          <label class="field"><span>Project name</span><input id="wsNameInput"></label>
           <label class="field"><span>Sticks per tray</span><input id="capacityInput" type="number" min="1" max="1000"></label>
+          <label class="check"><input id="noLimitInput" type="checkbox"> No limit (one tray per part number)</label>
           <label class="check"><input id="dupSerialInput" type="checkbox"> Allow the same serial number to be placed twice</label>
         </div>
         <div class="row gap wrap mt">
@@ -161,10 +165,10 @@
 
       <div class="card">
         <div class="card-head">
-          <h2>Scanner stations &amp; tray ranges</h2>
-          <button id="addStationBtn" class="btn">+ Add station</button>
+          <h2>Project members &amp; tray ranges</h2>
+          <button id="addStationBtn" class="btn">+ Add member</button>
         </div>
-        <p class="muted small">Each station gets its own range of tray numbers. Ranges must not overlap.</p>
+        <p class="muted small">Each member (or scanner station) gets their own range of tray numbers, so two people never fill the same tray. Ranges must not overlap.</p>
         <div class="table-wrap"><table class="grid" id="stationsTable"></table></div>
         <div id="stationProblems" class="warn-text"></div>
       </div>
@@ -172,6 +176,11 @@
       <div class="card" id="syncCard">
         <h2>Team sharing</h2>
         <div id="syncBody"></div>
+      </div>
+
+      <div class="card">
+        <h2>Where is my data saved?</h2>
+        <div id="storageInfo"></div>
       </div>
 
       <div class="card">
@@ -195,8 +204,8 @@
       <div class="card danger-zone">
         <h2>Danger zone</h2>
         <div class="row gap wrap">
-          <button id="clearScansBtn" class="btn danger">Delete all scans in this workspace</button>
-          <button id="deleteWsBtn" class="btn danger">Delete this workspace from this device</button>
+          <button id="clearScansBtn" class="btn danger">Delete all scans in this project</button>
+          <button id="deleteWsBtn" class="btn danger">Delete this project from this device</button>
         </div>
       </div>
     </section>

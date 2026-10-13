@@ -1,6 +1,6 @@
 import { parseScan, BRANDS, DEFAULT_BRAND_RULES } from './parser.js';
-import { makePlacer, traySummary, groupCount, rangeProblems, isBlankSerial } from './trays.js';
-import { newWorkspace, uid, shortId } from './defaults.js';
+import { makePlacer, traySummary, groupCount, rangeProblems, isBlankSerial, capOf } from './trays.js';
+import { newWorkspace, uid, shortId, stationsForMembers } from './defaults.js';
 import * as db from './store.js';
 import { CloudSync, makeJoinLink, readJoinLink, scanToRow, rowToScan } from './sync.js';
 import { loadScript } from './load.js';
@@ -59,6 +59,10 @@ const statusText = (s) => {
   return `<span class="st ${esc(s)}">${icon} ${esc(STATUS_TEXT[s] || s)}</span>`;
 };
 
+// "12/50", or just "12" when trays have no limit.
+const ofCap = (n, cap) => (Number.isFinite(cap) ? `${n}/${cap}` : `${n}`);
+const pctOf = (n, cap) => (Number.isFinite(cap) ? Math.min(100, Math.round((n / cap) * 100)) : 0);
+
 function stationById(id) {
   return state.ws.stations.find((s) => s.id === id);
 }
@@ -78,12 +82,24 @@ function toast(msg, ms = 2600) {
 // Simple modal. actions: [{ label, value, cls }]. `bind(root)` wires inner controls.
 function dialog({ title, body = '', actions = [{ label: 'Close', value: 'close' }], bind }) {
   const dlg = $('#dialog');
-  const form = $('#dialogForm');
+  // A fresh form per dialog so listeners added by `bind` never leak into the next one.
+  const form = document.createElement('form');
+  form.method = 'dialog';
+  form.id = 'dialogForm';
+  $('#dialogForm').replaceWith(form);
   form.innerHTML = `
     <h2>${esc(title)}</h2>
     <div class="dlg-body">${body}</div>
     <div class="dlg-actions">${actions.map((a) => `<button value="${esc(a.value)}" class="btn ${a.cls || ''}">${esc(a.label)}</button>`).join('')}</div>`;
   if (bind) bind(form);
+  // Enter in a single-line field confirms with the primary button instead of the first one.
+  form.onkeydown = (e) => {
+    if (e.key === 'Enter' && e.target.matches('input') && !e.defaultPrevented) {
+      e.preventDefault();
+      const primary = form.querySelector('.dlg-actions .primary');
+      if (primary) primary.click();
+    }
+  };
   return new Promise((resolve) => {
     dlg.onclose = () => {
       resolve(dlg.returnValue || 'close');
@@ -223,7 +239,7 @@ async function handleBulk(lines) {
 
 function showResult(rec, d) {
   state.lastResult = { id: rec.id, d };
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   const box = $('#result');
   box.className = 'result card';
   let kicker, tray, msg, kind;
@@ -232,7 +248,7 @@ function showResult(rec, d) {
     kind = d.newTray ? 'new' : 'ok';
     kicker = d.newTray ? (d.message.startsWith('Tray full') ? 'Previous tray full — new tray' : 'New part — new tray') : 'Add to tray';
     tray = rec.tray;
-    msg = `${d.count} / ${cap} sticks in this tray${full ? ' — tray is now FULL' : ''}`;
+    msg = Number.isFinite(cap) ? `${d.count} / ${cap} sticks in this tray${full ? ' — tray is now FULL' : ''}` : `${d.count} stick${d.count === 1 ? '' : 's'} in this tray (no limit)`;
     box.classList.add(d.newTray ? 'new' : 'ok');
     beep(d.newTray ? 'new' : 'ok');
     speak(`Tray ${rec.tray}`);
@@ -257,13 +273,13 @@ function showResult(rec, d) {
       speak('Trays full');
     }
   }
-  const pct = rec.status === 'placed' ? Math.min(100, Math.round((d.count / cap) * 100)) : 0;
+  const pct = rec.status === 'placed' ? pctOf(d.count, cap) : 0;
   box.innerHTML = `
     <div class="result-main">
       <div class="result-kicker">${esc(kicker)}</div>
       <div class="result-tray">${esc(tray)}</div>
       <div class="result-msg">${esc(msg)}</div>
-      ${rec.status === 'placed' ? `<div class="fillbar"><span style="width:${pct}%"></span></div>` : ''}
+      ${rec.status === 'placed' && Number.isFinite(cap) ? `<div class="fillbar"><span style="width:${pct}%"></span></div>` : ''}
       ${rec.status === 'duplicate' ? `<div class="row gap mt"><button class="btn" data-act="force">Place anyway</button><button class="btn" data-act="remove">Remove this scan</button></div>` : ''}
       ${rec.status === 'nopart' || rec.status === 'full' ? `<div class="row gap mt"><button class="btn" data-act="remove">Remove this scan</button></div>` : ''}
     </div>
@@ -389,7 +405,7 @@ function renderScan() {
 }
 
 function trayRows() {
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   let rows = traySummary(state.scans, state.ws.stations, cap);
   const text = $('#trayFilterText').value.trim().toUpperCase();
   const station = $('#trayFilterStation').value;
@@ -415,7 +431,7 @@ function renderTrays() {
   const keepB = fb.value;
   fb.innerHTML = '<option value="">All brands</option>' + BRANDS.map((b) => `<option ${b === keepB ? 'selected' : ''}>${b}</option>`).join('');
 
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   const rows = trayRows();
   const shown = rows.slice(0, 1500);
   $('#trayCount').textContent = `${rows.length} trays${rows.length > shown.length ? ` (showing first ${shown.length})` : ''}`;
@@ -434,12 +450,12 @@ function renderTrays() {
     return;
   }
   grid.innerHTML = shown.map((r) => {
-    const pct = Math.min(100, Math.round((r.count / cap) * 100));
+    const pct = pctOf(r.count, cap);
     return `<button class="tray ${r.state} b-${cls(r.brand)}" data-tray="${r.tray}">
-      <div class="tray-top"><span class="tray-num">${r.tray}</span><span class="tray-count">${r.count}/${cap}</span></div>
+      <div class="tray-top"><span class="tray-num">${r.tray}</span><span class="tray-count">${ofCap(r.count, cap)}</span></div>
       <div class="tray-part">${esc(r.part || 'Empty')}</div>
       <div class="tray-meta">${r.brand ? brandChip(r.brand) : ''}${r.gen ? genChip(r.gen) : ''}${trayBadge(r, cap)}</div>
-      <div class="fillbar"><span style="width:${pct}%"></span></div>
+      ${Number.isFinite(cap) ? `<div class="fillbar"><span style="width:${pct}%"></span></div>` : ''}
     </button>`;
   }).join('');
 }
@@ -452,12 +468,12 @@ function trayBadge(r, cap) {
 }
 
 async function openTray(n) {
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   const items = state.scans.filter((s) => s.tray === n && s.status === 'placed');
   const shipped = state.scans.filter((s) => s.tray === n && s.status === 'shipped');
   const st = state.ws.stations.find((s) => n >= s.trayStart && n <= s.trayEnd);
   const body = `
-    <p>${esc(st ? st.name : '')} · <b>${items.length}/${cap}</b> sticks${shipped.length ? ` · ${shipped.length} shipped earlier` : ''}</p>
+    <p>${esc(st ? st.name : '')} · <b>${ofCap(items.length, cap)}</b> sticks${shipped.length ? ` · ${shipped.length} shipped earlier` : ''}</p>
     ${items.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>#</th><th>Part #</th><th>Serial</th><th>Gen</th><th>Label</th><th>Scanned</th><th></th></tr></thead><tbody>` +
       items.map((s, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(s.part)}</td><td class="mono">${esc(s.serial || '—')}</td><td>${genChip(s.gen, s.genInferred)}</td><td>${esc(s.label)}</td><td class="small muted">${esc(fmtTime(s.ts))}</td><td><button type="button" class="btn small" data-del="${esc(s.id)}">Remove</button></td></tr>`).join('') +
       '</tbody></table></div>' : '<p class="muted">This tray is empty.</p>'}`;
@@ -515,7 +531,7 @@ function renderFind() {
     t.count++;
     byTray.set(s.tray, t);
   }
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   let html = '';
   if (serialHits.length) {
     html += `<div class="card"><h2>Serial number</h2>` + serialHits.map((s) => `<div class="find-hit"><span class="big">${s.tray ?? '—'}</span><div>${statusText(s.status)}<div class="mono">${esc(s.part)} · ${esc(s.serial)}</div><div class="small muted">${esc(stationById(s.stationId)?.name || '')} · ${esc(fmtTime(s.ts))}</div></div></div>`).join('') + '</div>';
@@ -523,7 +539,7 @@ function renderFind() {
   if (byTray.size) {
     html += `<div class="card"><h2>${exact.length ? 'Trays holding this part' : 'Similar parts'} · ${hits.length} sticks</h2><div class="tray-grid">` +
       [...byTray.values()].sort((a, b) => a.tray - b.tray).map((t) => `<button class="tray b-${cls(t.brand)}" data-tray="${t.tray}">
-        <div class="tray-top"><span class="tray-num">${t.tray}</span><span class="tray-count">${t.count}/${cap}</span></div>
+        <div class="tray-top"><span class="tray-num">${t.tray}</span><span class="tray-count">${ofCap(t.count, cap)}</span></div>
         <div class="tray-part">${esc(t.part)}</div>
         <div class="tray-meta">${brandChip(t.brand)}${t.gen ? genChip(t.gen) : ''}<span>${esc(stationById(t.stationId)?.name || '')}</span></div></button>`).join('') + '</div></div>';
   }
@@ -543,7 +559,7 @@ function bars(entries, colorFor, total, onClickAttr) {
 }
 
 function renderDashboard() {
-  const cap = state.ws.settings.capacity;
+  const cap = capOf(state.ws.settings);
   const placed = state.scans.filter((s) => s.status === 'placed');
   const rows = traySummary(state.scans, state.ws.stations, cap);
   const used = rows.filter((r) => r.count > 0).length;
@@ -664,7 +680,11 @@ function textToRules(text) {
 function renderSettings() {
   const ws = state.ws;
   if (document.activeElement !== $('#wsNameInput')) $('#wsNameInput').value = ws.name;
-  if (document.activeElement !== $('#capacityInput')) $('#capacityInput').value = ws.settings.capacity;
+  const unlimited = ws.settings.capacity === 0;
+  $('#noLimitInput').checked = unlimited;
+  $('#capacityInput').disabled = unlimited;
+  if (document.activeElement !== $('#capacityInput')) $('#capacityInput').value = unlimited ? '' : capOf(ws.settings);
+  renderStorageInfo();
   $('#dupSerialInput').checked = !!ws.settings.allowDuplicateSerials;
   $('#soundInput').checked = LS.get('sound', true);
   $('#voiceInput').checked = LS.get('voice', false);
@@ -673,7 +693,7 @@ function renderSettings() {
   const counts = groupCount(state.scans, 'stationId', () => true);
   const countOf = new Map(counts);
   if (!$('#stationsTable').contains(document.activeElement)) {
-    $('#stationsTable').innerHTML = `<thead><tr><th>Station name</th><th>Operator</th><th class="num">First tray</th><th class="num">Last tray</th><th class="num">Scans</th><th></th></tr></thead><tbody>` +
+    $('#stationsTable').innerHTML = `<thead><tr><th>Member / station</th><th>Person scanning</th><th class="num">First tray</th><th class="num">Last tray</th><th class="num">Scans</th><th></th></tr></thead><tbody>` +
       ws.stations.map((s) => `<tr data-st="${esc(s.id)}">
         <td><input data-f="name" value="${esc(s.name)}"></td>
         <td><input data-f="operator" value="${esc(s.operator)}"></td>
@@ -692,16 +712,16 @@ function renderSyncCard() {
     const s = state.syncStatus || {};
     const link = makeJoinLink(ws);
     body.innerHTML = `
-      <p>This workspace is <b>shared live</b>. Everyone who opens the team link sees the same trays and scans in real time; scanning keeps working offline and catches up later.</p>
+      <p>This project is <b>shared live</b>. Everyone who opens the team link sees the same trays and scans in real time; scanning keeps working offline and catches up later.</p>
       <p>Status: <b>${esc(s.state || 'connecting')}</b>${s.pending ? ` · ${s.pending} change(s) waiting to upload` : ''}${s.error ? ` · <span class="warn-text">${esc(s.error)}</span>` : ''}</p>
-      <label class="field"><span>Team link — send this to your team (anyone with it can view and edit this workspace)</span>
+      <label class="field"><span>Team link — send this to your team (anyone with it can view and edit this project)</span>
       <div class="share-box"><input id="shareLink" readonly value="${esc(link)}"><button class="btn primary" id="copyLink">Copy</button></div></label>
       <div class="row gap wrap mt"><button class="btn" id="resyncBtn">Reload from cloud</button><button class="btn danger" id="unlinkBtn">Stop syncing on this device</button></div>`;
     return;
   }
   const saved = LS.get('cloud', {}) || {};
   body.innerHTML = `
-    <p>Right now this workspace lives <b>only in this browser</b>. Anyone else who opens the app gets their <b>own separate workspace</b> — their scans never mix with yours.</p>
+    <p>Right now this project lives <b>only in this browser</b>. Anyone else who opens the app gets their <b>own separate projects</b> — their scans never mix with yours.</p>
     <p>Want a team to see the <b>same</b> live trays (like a shared Excel, but without anyone breaking formulas)? Connect a free Supabase project once, then share the team link:</p>
     <ol class="steps small">
       <li>Create a free project at <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a>.</li>
@@ -712,8 +732,8 @@ function renderSyncCard() {
       <label class="field" style="flex:1 1 260px"><span>Project URL</span><input id="sbUrl" placeholder="https://xxxx.supabase.co" value="${esc(saved.url || '')}"></label>
       <label class="field" style="flex:2 1 320px"><span>anon public key</span><input id="sbKey" placeholder="eyJhbGciOi…" value="${esc(saved.key || '')}"></label>
     </div>
-    <div class="row gap wrap mt"><button class="btn primary" id="shareBtn">Share this workspace with my team</button></div>
-    <p class="muted small mt">Got a team link from someone? Just open it — or paste it via the workspace menu (top right) → “Join with a team link”.</p>`;
+    <div class="row gap wrap mt"><button class="btn primary" id="shareBtn">Share this project with my team</button></div>
+    <p class="muted small mt">Got a team link from someone? Just open it — or paste it via the project menu (top right) → “Join with a team link”.</p>`;
 }
 
 // ------------------------------------------------------------ workspaces ----
@@ -823,7 +843,7 @@ function applyRemoteWorkspace(wsId, w) {
 }
 
 async function createWorkspace(name) {
-  const ws = newWorkspace(name || 'My Workspace');
+  const ws = newWorkspace(name || 'My Project');
   await db.putWorkspace(ws);
   await openWorkspace(ws.id);
   return ws;
@@ -845,27 +865,118 @@ async function joinTeam(info) {
   toast(`Joined “${info.name}”`);
 }
 
+async function newProjectWizard() {
+  const saved = LS.get('cloud', {}) || {};
+  const canShare = !!(saved.url && saved.key);
+  const res = await dialog({
+    title: 'New project',
+    body: `
+      <div class="wizard">
+        <label class="field"><span>Project name</span><input id="npName" value="${esc('Batch ' + new Date().toLocaleDateString())}"></label>
+        <label class="field"><span>Project members — one name per line (each gets their own trays)</span>
+          <textarea id="npMembers" rows="6" placeholder="Ashu&#10;Ronny&#10;Elvira">${esc(state.ws.stations.map((s) => s.operator || s.name).filter((v, i, a) => v && a.indexOf(v) === i).slice(0, 7).join('\n'))}</textarea></label>
+        <div class="row gap wrap">
+          <label class="field"><span>Trays per member</span><input id="npTrays" type="number" min="1" max="10000" value="100"></label>
+          <label class="field"><span>Sticks per tray</span><input id="npCap" type="number" min="1" max="1000" value="50"></label>
+          <label class="check"><input id="npNoLimit" type="checkbox"> No limit</label>
+        </div>
+        ${canShare ? '<label class="check mt"><input id="npShare" type="checkbox" checked> Share live with my team (uses your saved team database)</label>' : ''}
+        <p class="small muted mt" id="npPreview"></p>
+      </div>`,
+    actions: [{ label: 'Cancel', value: 'cancel' }, { label: 'Create project', value: 'ok', cls: 'primary' }],
+    bind(root) {
+      const q = (id) => root.querySelector(id);
+      const read = () => {
+        const members = q('#npMembers').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        return {
+          name: q('#npName').value.trim() || 'New project',
+          members: members.length ? [...new Set(members)] : ['Station 1'],
+          trays: Math.max(1, parseInt(q('#npTrays').value, 10) || 100),
+          cap: q('#npNoLimit').checked ? 0 : Math.max(1, parseInt(q('#npCap').value, 10) || 50),
+          share: !!(q('#npShare') && q('#npShare').checked),
+        };
+      };
+      const preview = () => {
+        const v = read();
+        q('#npCap').disabled = v.cap === 0;
+        q('#npPreview').innerHTML = stationsForMembers(v.members, v.trays).map((s) => `<b>${esc(s.name)}</b>: trays ${s.trayStart}–${s.trayEnd}`).join(' · ') +
+          `<br>${v.cap ? `Up to ${v.cap} sticks per tray, then a new tray opens.` : 'No limit: all sticks of the same part number go in one tray.'}`;
+      };
+      root.addEventListener('input', preview);
+      preview();
+      dialog.wizard = read;
+    },
+  });
+  if (res !== 'ok') return;
+  const v = dialog.wizard();
+  const ws = newWorkspace(v.name);
+  ws.stations = stationsForMembers(v.members, v.trays);
+  ws.settings.capacity = v.cap;
+  await db.putWorkspace(ws);
+  await openWorkspace(ws.id);
+  setView('scan');
+  if (v.share) {
+    state.ws.cloud = { url: saved.url, key: saved.key };
+    await db.putWorkspace(state.ws);
+    if (await startSync()) {
+      toast('Project created and shared — copy the team link in Settings', 5000);
+      render();
+      return;
+    }
+    if (state.sync) state.sync.close(), (state.sync = null);
+    state.ws.cloud = null;
+    state.syncStatus = null;
+    await db.putWorkspace(state.ws);
+    render();
+    toast('Project created, but the team database could not be reached — it is saved on this device only for now.', 7000);
+    return;
+  }
+  toast(`Project “${v.name}” created with ${v.members.length} member${v.members.length === 1 ? '' : 's'}`);
+}
+
+let persisted = null;
+async function requestPersistence() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist());
+    }
+  } catch {
+    persisted = null;
+  }
+}
+
+function renderStorageInfo() {
+  const box = $('#storageInfo');
+  if (!box) return;
+  const last = LS.get('backup.' + state.ws.id);
+  const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  box.innerHTML = `
+    <ul class="steps small">
+      <li><b>Every scan is saved instantly</b> to this browser's built-in database (IndexedDB) on this device — before the tray number even appears. Closing the tab, the browser, a crash or a power cut loses nothing: open the same link on the same device and browser and everything is back.</li>
+      <li>Browser storage protection: ${persisted ? '<b style="color:var(--good)">ON</b> — the browser will not auto-delete this data.' : persisted === false ? '<b>not granted</b> by this browser (data is still saved; keep regular backups).' : 'unknown in this browser.'}</li>
+      <li>${state.ws.cloud ? '<b>Team project:</b> every scan is also uploaded to your team database, so it is safe even if this device is lost, and other members see it live.' : '<b>Only on this device.</b> Data is lost if you clear browsing data, use a private/incognito window, or switch to another device/browser.'}</li>
+      <li>Last backup of this project: <b>${last ? (days === 0 ? 'today' : days + ' day(s) ago') : 'never'}</b>. ${!state.ws.cloud ? 'Use “Download backup” or “Export Excel” below at the end of each day.' : ''}</li>
+    </ul>`;
+}
+
 async function workspaceMenu() {
   const all = (await db.listWorkspaces()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const res = await dialog({
-    title: 'Workspaces on this device',
+    title: 'Projects on this device',
     body: `<div class="ws-list">${all.map((w) => `
       <div class="ws-item ${w.id === state.ws.id ? 'current' : ''}">
         <div class="grow"><b>${esc(w.name)}</b><div class="small muted">${w.cloud ? '● Team (synced)' : 'Only on this device'}</div></div>
         ${w.id === state.ws.id ? '<span class="small muted">Open</span>' : `<button class="btn small" value="open:${esc(w.id)}">Open</button>`}
       </div>`).join('')}</div>
-      <p class="muted small">Each workspace has its own stations, trays and scans. Use one per batch, shift, or customer.</p>`,
+      <p class="muted small">Each project has its own members, trays and scans. Use one per batch, shipment, shift or customer.</p>`,
     actions: [
       { label: 'Join with a team link', value: 'join' },
-      { label: '+ New workspace', value: 'new', cls: 'primary' },
+      { label: '+ New project', value: 'new', cls: 'primary' },
       { label: 'Close', value: 'close' },
     ],
   });
   if (res.startsWith('open:')) await openWorkspace(res.slice(5));
-  else if (res === 'new') {
-    const name = prompt('Name for the new workspace', `Batch ${new Date().toLocaleDateString()}`);
-    if (name) await createWorkspace(name.trim());
-  } else if (res === 'join') {
+  else if (res === 'new') await newProjectWizard(); else if (res === 'join') {
     const link = prompt('Paste the team link');
     const info = link && readJoinLink(link.slice(link.indexOf('#')));
     if (link && !info) return toast('That link is not a valid team link');
@@ -926,6 +1037,8 @@ async function importExcel(file) {
 function backup() {
   const data = { format: 'ddr-tray-scanner', version: 1, exportedAt: new Date().toISOString(), workspace: { ...state.ws, cloud: null }, scans: state.scans };
   downloadText(`${state.ws.name.replace(/[^\w-]+/g, '_')}_backup.json`, JSON.stringify(data));
+  LS.set('backup.' + state.ws.id, Date.now());
+  if (state.view === 'settings') renderStorageInfo();
 }
 
 async function restore(file) {
@@ -940,7 +1053,7 @@ async function restore(file) {
   await db.putWorkspace(ws);
   await db.putScans((data.scans || []).map((s) => ({ ...s, id: uid(), wsId: ws.id })));
   await openWorkspace(ws.id);
-  toast(`Restored ${(data.scans || []).length.toLocaleString()} scans into a new workspace`);
+  toast(`Restored ${(data.scans || []).length.toLocaleString()} scans into a new project`);
 }
 
 // --------------------------------------------------------------- camera ----
@@ -1113,6 +1226,12 @@ function bind() {
     saveWorkspace();
     toast(`Trays now hold ${n} sticks (applies to new scans)`);
   });
+  $('#noLimitInput').addEventListener('change', (e) => {
+    state.ws.settings.capacity = e.target.checked ? 0 : parseInt($('#capacityInput').value, 10) || 50;
+    saveWorkspace();
+    toast(e.target.checked ? 'No tray limit: each part number keeps one tray' : `Trays hold ${state.ws.settings.capacity} sticks`);
+  });
+  $('#newProjectBtn2').addEventListener('click', newProjectWizard);
   $('#dupSerialInput').addEventListener('change', (e) => {
     state.ws.settings.allowDuplicateSerials = e.target.checked;
     saveWorkspace();
@@ -1147,7 +1266,11 @@ function bind() {
   });
   $('#addStationBtn').addEventListener('click', () => {
     const maxEnd = Math.max(0, ...state.ws.stations.map((s) => s.trayEnd));
-    state.ws.stations.push({ id: 'st_' + shortId(6), name: `Station ${state.ws.stations.length + 1}`, operator: '', trayStart: maxEnd + 1, trayEnd: maxEnd + 100 });
+    const name = prompt('Member name', `Member ${state.ws.stations.length + 1}`);
+    if (!name || !name.trim()) return;
+    const size = state.ws.stations.length ? state.ws.stations[state.ws.stations.length - 1].trayEnd - state.ws.stations[state.ws.stations.length - 1].trayStart + 1 : 100;
+    state.ws.stations.push({ id: 'st_' + shortId(6), name: name.trim(), operator: name.trim(), trayStart: maxEnd + 1, trayEnd: maxEnd + size });
+    toast(`${name.trim()} gets trays ${maxEnd + 1}–${maxEnd + size}`);
     saveWorkspace();
   });
   $('#saveRulesBtn').addEventListener('click', () => {
@@ -1176,7 +1299,7 @@ function bind() {
   $('#clearScansBtn').addEventListener('click', async () => {
     const n = state.scans.length;
     if (!n) return toast('No scans to delete');
-    const typed = prompt(`This deletes all ${n.toLocaleString()} scans in “${state.ws.name}”${state.ws.cloud ? ' for EVERYONE on the team' : ''}. Type DELETE to confirm.`);
+    const typed = prompt(`This deletes all ${n.toLocaleString()} scans in project “${state.ws.name}”${state.ws.cloud ? ' for EVERYONE on the team' : ''}. Type DELETE to confirm.`);
     if (typed !== 'DELETE') return;
     await commit([], state.scans.map((s) => s.id));
     toast('All scans deleted');
@@ -1188,7 +1311,7 @@ function bind() {
     await db.deleteWorkspace(id);
     const rest = await db.listWorkspaces();
     if (rest.length) await openWorkspace(rest[0].id);
-    else await createWorkspace('My Workspace');
+    else await createWorkspace('My Project');
   });
   $('#syncBody').addEventListener('click', async (e) => {
     const id = e.target.id;
@@ -1277,6 +1400,7 @@ async function promptJoin(info) {
 
 async function boot() {
   bind();
+  requestPersistence();
   try {
     await db.openDb();
   } catch (e) {
@@ -1287,7 +1411,7 @@ async function boot() {
   const all = await db.listWorkspaces();
   const last = LS.get('lastWs');
   if (all.length) await openWorkspace(all.some((w) => w.id === last) ? last : all[0].id);
-  else await createWorkspace('My Workspace');
+  else await createWorkspace('My Project');
   const v = location.hash.replace('#', '');
   setView(['scan', 'trays', 'find', 'dashboard', 'log', 'settings'].includes(v) ? v : 'scan');
   if (join) await promptJoin(join);

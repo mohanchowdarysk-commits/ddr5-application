@@ -43,7 +43,18 @@ export function defaultStations() {
   }));
 }
 
-export function newWorkspace(name = 'My Workspace') {
+// Members -> stations with consecutive tray ranges.
+export function stationsForMembers(names, traysEach = 100) {
+  return names.map((name, i) => ({
+    id: 'st' + (i + 1) + '_' + shortId(4),
+    name,
+    operator: name,
+    trayStart: i * traysEach + 1,
+    trayEnd: (i + 1) * traysEach,
+  }));
+}
+
+export function newWorkspace(name = 'My Project') {
   return {
     id: 'ws_' + shortId(16),
     name,
