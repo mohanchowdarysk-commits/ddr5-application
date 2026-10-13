@@ -1,0 +1,9 @@
+{
+  "name": "DDR Tray Scanner",
+  "short_name": "Tray Scanner",
+  "start_url": "./#scan",
+  "display": "standalone",
+  "background_color": "#f4f4f2",
+  "theme_color": "#2a78d6",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

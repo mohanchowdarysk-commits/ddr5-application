@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DDR Tray Scanner</title>
+  <meta name="description" content="Scan DDR memory sticks, auto-detect brand, generation and part number, and get told which tray to place them in.">
+  <meta name="theme-color" content="#2a78d6">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="logo"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M5 17v3M9 17v3M13 17v3M17 17v3M6 10h3v4H6zM11 10h3v4h-3zM16 10h2v4h-2z"/></svg>
+      <span>DDR Tray Scanner</span>
+    </div>
+    <button id="wsButton" class="ws-button" title="Switch workspace"><span id="wsName">…</span> <span aria-hidden="true">▾</span></button>
+    <span id="syncPill" class="pill" hidden></span>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-view="scan" aria-selected="true">Scan</button>
+    <button role="tab" data-view="trays">Trays</button>
+    <button role="tab" data-view="find">Find</button>
+    <button role="tab" data-view="dashboard">Dashboard</button>
+    <button role="tab" data-view="log">Log</button>
+    <button role="tab" data-view="settings">Settings</button>
+  </nav>
+
+  <main id="main">
+    <!-- SCAN -->
+    <section id="view-scan" class="view">
+      <div class="scan-controls card">
+        <label class="field">
+          <span>Scanner station</span>
+          <select id="stationSelect"></select>
+        </label>
+        <label class="field">
+          <span>Operator</span>
+          <input id="operatorInput" autocomplete="off" placeholder="Your name">
+        </label>
+        <div class="field station-meta" id="stationMeta"></div>
+      </div>
+
+      <form id="scanForm" class="scan-input card" autocomplete="off">
+        <label for="scanInput" class="sr-only">Scan input</label>
+        <input id="scanInput" class="scan-box" placeholder="Scan barcode / QR here (or type + Enter)" spellcheck="false" autocapitalize="off" autocomplete="off" enterkeyhint="go">
+        <button type="submit" class="btn primary">Add</button>
+        <button type="button" id="cameraBtn" class="btn" title="Scan with this device's camera">📷 Camera</button>
+      </form>
+      <div id="cameraBox" class="card camera" hidden>
+        <div id="cameraReader"></div>
+        <button type="button" id="cameraStop" class="btn">Stop camera</button>
+      </div>
+
+      <div id="result" class="result card idle" aria-live="assertive">
+        <div class="result-main">
+          <div class="result-kicker">Ready</div>
+          <div class="result-tray">—</div>
+          <div class="result-msg">Scan a stick to see which tray it goes in.</div>
+        </div>
+        <div class="result-side"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Recent scans at this station</h2>
+          <div class="row gap">
+            <button id="undoBtn" class="btn" title="Delete the last scan made on this device (Ctrl+Z)">↶ Undo last</button>
+            <button id="bulkBtn" class="btn">Bulk paste</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="grid" id="recentTable"></table></div>
+      </div>
+    </section>
+
+    <!-- TRAYS -->
+    <section id="view-trays" class="view" hidden>
+      <div class="card filters">
+        <input id="trayFilterText" type="search" placeholder="Filter by tray #, part, label…">
+        <select id="trayFilterStation"></select>
+        <select id="trayFilterBrand"></select>
+        <select id="trayFilterGen"><option value="">All gens</option><option>DDR3</option><option>DDR4</option><option>DDR5</option></select>
+        <select id="trayFilterState">
+          <option value="used">Used trays</option>
+          <option value="">All trays</option>
+          <option value="partial">Partially filled</option>
+          <option value="full">Full</option>
+          <option value="empty">Empty</option>
+          <option value="warn">Warnings</option>
+        </select>
+        <div class="seg" role="group" aria-label="Layout">
+          <button data-layout="cards" class="on">Cards</button>
+          <button data-layout="table">Table</button>
+        </div>
+      </div>
+      <div id="trayCount" class="muted small"></div>
+      <div id="trayGrid" class="tray-grid"></div>
+    </section>
+
+    <!-- FIND -->
+    <section id="view-find" class="view" hidden>
+      <div class="card">
+        <label class="field wide">
+          <span>Find a part number, serial, or label — or scan it</span>
+          <input id="findInput" type="search" placeholder="e.g. M393A2K43DB3-CWE or a serial" autocomplete="off">
+        </label>
+      </div>
+      <div id="findResults"></div>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view" hidden>
+      <div id="kpis" class="kpis"></div>
+      <div class="dash-grid">
+        <div class="card"><h2>Sticks by brand</h2><div id="byBrand"></div></div>
+        <div class="card"><h2>Sticks by generation</h2><div id="byGen"></div></div>
+        <div class="card"><h2>Station fill</h2><div id="byStation"></div></div>
+        <div class="card"><h2>Top part numbers</h2><div id="byPart"></div></div>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section id="view-log" class="view" hidden>
+      <div class="card filters">
+        <input id="logFilterText" type="search" placeholder="Search part, serial, raw scan, note…">
+        <select id="logFilterStation"></select>
+        <select id="logFilterStatus">
+          <option value="">All statuses</option>
+          <option value="placed">Placed</option>
+          <option value="duplicate">Duplicate serial</option>
+          <option value="nopart">No part #</option>
+          <option value="full">Trays full</option>
+          <option value="shipped">Shipped</option>
+        </select>
+        <button id="exportCsvBtn" class="btn">Export CSV</button>
+        <button id="exportXlsxBtn" class="btn">Export Excel</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap"><table class="grid" id="logTable"></table></div>
+        <div class="pager" id="logPager"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view" hidden>
+      <div class="card">
+        <h2>Workspace</h2>
+        <div class="row gap wrap">
+          <label class="field"><span>Name</span><input id="wsNameInput"></label>
+          <label class="field"><span>Sticks per tray</span><input id="capacityInput" type="number" min="1" max="1000"></label>
+          <label class="check"><input id="dupSerialInput" type="checkbox"> Allow the same serial number to be placed twice</label>
+        </div>
+        <div class="row gap wrap mt">
+          <label class="check"><input id="soundInput" type="checkbox"> Beep on scan (this device)</label>
+          <label class="check"><input id="voiceInput" type="checkbox"> Speak tray number (this device)</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Scanner stations &amp; tray ranges</h2>
+          <button id="addStationBtn" class="btn">+ Add station</button>
+        </div>
+        <p class="muted small">Each station gets its own range of tray numbers. Ranges must not overlap.</p>
+        <div class="table-wrap"><table class="grid" id="stationsTable"></table></div>
+        <div id="stationProblems" class="warn-text"></div>
+      </div>
+
+      <div class="card" id="syncCard">
+        <h2>Team sharing</h2>
+        <div id="syncBody"></div>
+      </div>
+
+      <div class="card">
+        <h2>Import &amp; backup</h2>
+        <div class="row gap wrap">
+          <label class="btn file-btn">Import from Excel (.xlsx)<input type="file" id="importXlsx" accept=".xlsx,.xlsm,.xls" hidden></label>
+          <button id="exportXlsxBtn2" class="btn">Export Excel</button>
+          <button id="backupBtn" class="btn">Download backup (.json)</button>
+          <label class="btn file-btn">Restore backup<input type="file" id="restoreFile" accept=".json" hidden></label>
+        </div>
+        <p class="muted small">Import reads the original DDR MultiScanner workbook (sheets named like “1-100”, scans in column B) or a file exported from this app, and places every scan in order.</p>
+      </div>
+
+      <div class="card">
+        <h2>Brand detection rules</h2>
+        <p class="muted small">Part numbers that <b>start with</b> a prefix win first; then the “contains” list is checked in order (the original workbook's rule). One rule per line: <code>Brand | prefixes | contains</code>, values comma-separated.</p>
+        <textarea id="rulesInput" rows="7" spellcheck="false"></textarea>
+        <div class="row gap mt"><button id="saveRulesBtn" class="btn primary">Save rules</button><button id="resetRulesBtn" class="btn">Reset to default</button></div>
+      </div>
+
+      <div class="card danger-zone">
+        <h2>Danger zone</h2>
+        <div class="row gap wrap">
+          <button id="clearScansBtn" class="btn danger">Delete all scans in this workspace</button>
+          <button id="deleteWsBtn" class="btn danger">Delete this workspace from this device</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="dialog"><form method="dialog" id="dialogForm"></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
