@@ -1,5 +1,7 @@
 # DDR Tray Scanner
 
+**Live app:** https://mohanchowdarysk-commits.github.io/ddr5-application/
+
 A free web app that replaces the **DDR_MultiScanner** Excel workbook. Scan a memory stick (barcode gun, phone camera, or paste) and it tells you, in big numbers, **which tray it goes in**. It detects the brand, DDR generation, label, serial number and part number the same way the workbook did.
 
 No install and no server to run. It's plain HTML and JavaScript, hosted free on GitHub Pages.
@@ -32,7 +34,7 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 1. On GitHub, open this repository and go to **Settings → Pages**.
 2. Under **Build and deployment → Source**, choose **Deploy from a branch**. Pick branch **`main`** and folder **`/ (root)`**, then click **Save**.
 3. Wait about a minute. Your link appears at the top of that page:
-   `https://<your-github-username>.github.io/ddr-tray-scanner/`
+   `https://mohanchowdarysk-commits.github.io/ddr5-application/`
 
 Share that link with anyone. Each person gets their own workspace and nobody's scans mix with anyone else's.
 
