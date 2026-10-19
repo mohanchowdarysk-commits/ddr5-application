@@ -130,13 +130,20 @@ export class SheetSync {
   async fetchWorkspace() {
     const { ops, rev } = await this.pullPages(0);
     const scans = new Map();
+    const deleted = new Set();
     let ws = null;
     for (const op of ops) {
-      if (op.kind === 'upsert' && op.data) scans.set(op.data.id, rowToScan(op.data));
-      else if (op.kind === 'delete') scans.delete(op.id);
+      if (op.kind === 'upsert' && op.data) {
+        scans.set(op.data.id, rowToScan(op.data));
+        deleted.delete(op.data.id);
+      } else if (op.kind === 'delete') {
+        scans.delete(op.id);
+        deleted.add(op.id);
+      }
       else if (op.kind === 'workspace' && op.data) ws = { id: this.wsId, name: op.data.name, stations: op.data.stations, settings: op.data.settings };
     }
     this.rev = rev;
+    this.deletedIds = deleted;
     this.cache = [...scans.values()];
     return ws;
   }

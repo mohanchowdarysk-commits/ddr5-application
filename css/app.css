@@ -294,3 +294,21 @@ dialog::backdrop { background: rgb(0 0 0 / 40%); }
 @media print {
   .topbar, .tabs, .filters { display: none; }
 }
+
+/* start screen */
+body.choosing .tabs, body.choosing main, body.choosing #syncPill { display: none; }
+.start { max-width: 760px; margin: 0 auto; padding: 24px 16px 40px; display: flex; flex-direction: column; gap: 14px; }
+.start h1 { font-size: 24px; margin: 0; }
+.start .lead { color: var(--text-2); margin: 0; }
+.start-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.start-actions .btn.big { font-size: 17px; padding: 12px 18px; }
+.proj { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.proj + .proj { margin-top: 8px; }
+.proj.last { border-color: var(--accent); }
+.proj .grow { flex: 1; min-width: 0; }
+.proj .name { font-weight: 700; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj .meta { font-size: 13px; color: var(--muted); }
+.trash summary { cursor: pointer; font-weight: 600; color: var(--text-2); }
+.trash .proj { opacity: .85; }
+.warn-box { border: 2px solid var(--bad); background: var(--bad-bg); color: var(--text); border-radius: 10px; padding: 12px 14px; }
+.warn-box b.big { color: var(--bad); font-size: 16px; }

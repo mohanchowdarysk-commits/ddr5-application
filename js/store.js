@@ -84,6 +84,11 @@ export async function getScans(wsId) {
   return req(db.transaction('scans').objectStore('scans').index('ws').getAll(IDBKeyRange.only(wsId)));
 }
 
+export async function countScans(wsId) {
+  const db = await openDb();
+  return req(db.transaction('scans').objectStore('scans').index('ws').count(IDBKeyRange.only(wsId)));
+}
+
 export async function putScans(scans) {
   if (!scans.length) return;
   const db = await openDb();
@@ -99,23 +104,6 @@ export async function deleteScans(ids) {
   const tx = db.transaction('scans', 'readwrite');
   const st = tx.objectStore('scans');
   for (const id of ids) st.delete(id);
-  return txDone(tx);
-}
-
-export async function replaceScans(wsId, scans) {
-  const db = await openDb();
-  const tx = db.transaction('scans', 'readwrite');
-  const st = tx.objectStore('scans');
-  const cur = st.index('ws').openKeyCursor(IDBKeyRange.only(wsId));
-  cur.onsuccess = () => {
-    const c = cur.result;
-    if (c) {
-      st.delete(c.primaryKey);
-      c.continue();
-    } else {
-      for (const s of scans) st.put(s);
-    }
-  };
   return txDone(tx);
 }
 

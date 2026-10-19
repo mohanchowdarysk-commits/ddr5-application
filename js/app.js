@@ -207,7 +207,7 @@ function makeRecord(parsed, d, station) {
 
 async function handleScan(raw) {
   raw = String(raw || '').trim();
-  if (!raw) return;
+  if (!raw || !state.ws) return;
   const station = currentStation();
   const parsed = parseScan(raw, state.ws.settings.brandRules);
   const placer = makePlacer(state.scans, state.ws.settings);
@@ -307,6 +307,7 @@ async function forcePlace(id) {
 }
 
 async function undoLast() {
+  if (!state.ws) return;
   const mine = state.scans.filter((s) => s.device === deviceId);
   const last = mine[mine.length - 1];
   if (!last) return toast('Nothing to undo on this device');
@@ -774,7 +775,11 @@ async function openWorkspace(id) {
   }
   state.syncStatus = null;
   const ws = await db.getWorkspace(id);
-  if (!ws) throw new Error('Workspace not found');
+  if (!ws) throw new Error('Project not found');
+  if (ws.deletedAt) throw new Error('This project is in Recently deleted — restore it first');
+  ws.lastOpenedAt = Date.now();
+  await db.putWorkspace(ws);
+  hideStartScreen();
   ws.settings = { capacity: 50, allowDuplicateSerials: false, brandRules: structuredClone(DEFAULT_BRAND_RULES), ...ws.settings };
   state.ws = ws;
   LS.set('lastWs', id);
@@ -848,8 +853,16 @@ async function pullFromCloud(sync, publishIfMissing) {
     if (p.kind === 'delete') map.delete(p.id);
     else if (p.kind === 'upsert') map.set(p.row.id, rowToScan(p.row));
   }
+  // Never drop local scans the sheet doesn't have yet: keep them and upload them.
+  // Only scans the sheet explicitly records as deleted are removed here.
+  const deletedRemotely = sync.deletedIds || new Set();
+  const missing = state.scans.filter((s) => !map.has(s.id) && !deletedRemotely.has(s.id));
+  for (const s of missing) map.set(s.id, s);
   const merged = [...map.values()].map((s) => ({ ...s, wsId: ws.id }));
-  await db.replaceScans(ws.id, merged);
+  const removed = state.scans.filter((s) => deletedRemotely.has(s.id) && !map.has(s.id)).map((s) => s.id);
+  await db.putScans(merged);
+  await db.deleteScans(removed);
+  if (missing.length) await sync.enqueue(missing.map((s) => ({ kind: 'upsert', row: toRow(s) })));
   state.byId = new Map(merged.map((s) => [s.id, s]));
   state.scans = merged;
   sortScans();
@@ -873,13 +886,6 @@ function applyRemoteWorkspace(wsId, w) {
   if (w.settings) state.ws.settings = { ...state.ws.settings, ...w.settings };
   db.putWorkspace(state.ws);
   scheduleRender();
-}
-
-async function createWorkspace(name) {
-  const ws = newWorkspace(name || 'My Project');
-  await db.putWorkspace(ws);
-  await openWorkspace(ws.id);
-  return ws;
 }
 
 async function joinTeam(info) {
@@ -908,7 +914,7 @@ async function newProjectWizard() {
       <div class="wizard">
         <label class="field"><span>Project name</span><input id="npName" value="${esc('Batch ' + new Date().toLocaleDateString())}"></label>
         <label class="field"><span>Project members — one name per line (each gets their own trays)</span>
-          <textarea id="npMembers" rows="6" placeholder="Ashu&#10;Ronny&#10;Elvira">${esc(state.ws.stations.map((s) => s.operator || s.name).filter((v, i, a) => v && a.indexOf(v) === i).slice(0, 7).join('\n'))}</textarea></label>
+          <textarea id="npMembers" rows="6" placeholder="Ashu&#10;Ronny&#10;Elvira">${esc((state.ws ? state.ws.stations : []).map((s) => s.operator || s.name).filter((v, i, a) => v && a.indexOf(v) === i).slice(0, 7).join('\n'))}</textarea></label>
         <div class="row gap wrap">
           <label class="field"><span>Trays per member</span><input id="npTrays" type="number" min="1" max="10000" value="100"></label>
           <label class="field"><span>Sticks per tray</span><input id="npCap" type="number" min="1" max="1000" value="50"></label>
@@ -993,29 +999,159 @@ function renderStorageInfo() {
     </ul>`;
 }
 
-async function workspaceMenu() {
-  const all = (await db.listWorkspaces()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const res = await dialog({
-    title: 'Projects on this device',
-    body: `<div class="ws-list">${all.map((w) => `
-      <div class="ws-item ${w.id === state.ws.id ? 'current' : ''}">
-        <div class="grow"><b>${esc(w.name)}</b><div class="small muted">${w.cloud ? '● Team (synced)' : 'Only on this device'}</div></div>
-        ${w.id === state.ws.id ? '<span class="small muted">Open</span>' : `<button class="btn small" value="open:${esc(w.id)}">Open</button>`}
-      </div>`).join('')}</div>
-      <p class="muted small">Each project has its own members, trays and scans. Use one per batch, shipment, shift or customer.</p>`,
-    actions: [
-      { label: 'Join with a team link', value: 'join' },
-      { label: '+ New project', value: 'new', cls: 'primary' },
-      { label: 'Close', value: 'close' },
-    ],
-  });
-  if (res.startsWith('open:')) await openWorkspace(res.slice(5));
-  else if (res === 'new') await newProjectWizard(); else if (res === 'join') {
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+
+function fmtDay(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return 'today ' + d.toTimeString().slice(0, 5);
+  return d.toLocaleDateString() + ' ' + d.toTimeString().slice(0, 5);
+}
+
+function hideStartScreen() {
+  document.body.classList.remove('choosing');
+  $('#startScreen').hidden = true;
+}
+
+// Shown every time the app opens (and from the project button): create a new
+// project or open one that already exists. Nothing is ever opened or created
+// automatically, and nothing is deleted from here without a typed confirmation.
+async function showStartScreen() {
+  stopCamera();
+  document.body.classList.add('choosing');
+  $('#wsName').textContent = 'Projects';
+  const el = $('#startScreen');
+  el.hidden = false;
+  el.innerHTML = '<p class="muted">Loading projects…</p>';
+  const all = await db.listWorkspaces();
+  const counts = new Map(await Promise.all(all.map(async (w) => [w.id, await db.countScans(w.id).catch(() => 0)])));
+  const active = all.filter((w) => !w.deletedAt).sort((a, b) => (b.lastOpenedAt || b.updatedAt || 0) - (a.lastOpenedAt || a.updatedAt || 0));
+  const trashed = all.filter((w) => w.deletedAt).sort((a, b) => b.deletedAt - a.deletedAt);
+  const last = LS.get('lastWs');
+  const row = (w) => `
+    <div class="proj ${w.id === last ? 'last' : ''}">
+      <div class="grow">
+        <div class="name">${esc(w.name)}</div>
+        <div class="meta">${plural(counts.get(w.id) || 0, 'scan')} · ${plural((w.stations || []).length, 'member')} · ${w.cloud ? '● Team (Google Sheet)' : 'This device only'} · last opened ${esc(fmtDay(w.lastOpenedAt || w.updatedAt))}</div>
+      </div>
+      <button class="btn primary" data-start="open" data-id="${esc(w.id)}">Open</button>
+    </div>`;
+  const trashRow = (w) => `
+    <div class="proj">
+      <div class="grow">
+        <div class="name">${esc(w.name)}</div>
+        <div class="meta">${plural(counts.get(w.id) || 0, 'scan')} · deleted ${esc(fmtDay(w.deletedAt))}</div>
+      </div>
+      <button class="btn" data-start="restore" data-id="${esc(w.id)}">Restore</button>
+      <button class="btn danger small" data-start="purge" data-id="${esc(w.id)}">Delete forever</button>
+    </div>`;
+  el.innerHTML = `
+    <h1>DDR Tray Scanner</h1>
+    <p class="lead">Start a new project or continue one you already have.</p>
+    <div class="start-actions">
+      <button class="btn primary big" data-start="new">＋ Create new project</button>
+      <button class="btn big" data-start="join">Join with a team link</button>
+      <label class="btn big file-btn">Restore from backup<input type="file" accept=".json" hidden data-start="restorefile"></label>
+    </div>
+    <div class="card">
+      <h2>Open an existing project ${active.length ? `<span class="muted small">(${active.length})</span>` : ''}</h2>
+      ${active.length ? active.map(row).join('') : '<p class="muted">No projects on this device yet — create one above, or join your team’s project with the team link.</p>'}
+    </div>
+    ${state.ws && !state.ws.deletedAt ? `<button class="btn" data-start="back">← Back to “${esc(state.ws.name)}”</button>` : ''}
+    ${trashed.length ? `<details class="card trash"><summary>Recently deleted (${trashed.length}) — can be restored</summary><div class="mt">${trashed.map(trashRow).join('')}</div>
+      <p class="muted small">Projects here are kept until you choose “Delete forever”. They are never removed automatically.</p></details>` : ''}
+    <p class="muted small">Projects are saved in this browser on this device. Team projects are also saved in your team’s Google Sheet.</p>`;
+}
+
+async function onStartClick(e) {
+  const t = e.target.closest('[data-start]');
+  if (!t || t.dataset.start === 'restorefile') return;
+  const act = t.dataset.start;
+  const id = t.dataset.id;
+  if (act === 'open') {
+    await openWorkspace(id);
+    setView('scan');
+  } else if (act === 'new') {
+    await newProjectWizard();
+  } else if (act === 'back') {
+    hideStartScreen();
+    render();
+  } else if (act === 'join') {
     const link = prompt('Paste the team link');
     const info = link && readJoinLink(link.slice(link.indexOf('#')));
     if (link && !info) return toast('That link is not a valid team link');
     if (info) await joinTeam(info);
+  } else if (act === 'restore') {
+    const ws = await db.getWorkspace(id);
+    delete ws.deletedAt;
+    await db.putWorkspace(ws);
+    toast(`“${ws.name}” restored`);
+    await showStartScreen();
+  } else if (act === 'purge') {
+    await purgeProject(id);
   }
+}
+
+// Step 1 of deleting: move to Recently deleted (always recoverable).
+async function trashProject() {
+  const ws = state.ws;
+  const n = state.scans.length;
+  const trays = new Set(state.scans.filter((s) => s.status === 'placed').map((s) => s.tray)).size;
+  for (;;) {
+    const res = await dialog({
+      title: 'Delete this project?',
+      body: `<div class="warn-box"><b class="big">⚠ Warning: you are deleting “${esc(ws.name)}”.</b><br>
+        It has <b>${plural(n, 'scan')}</b> in <b>${plural(trays, 'tray')}</b> and ${plural(ws.stations.length, 'member')}.</div>
+        <p>It will be moved to <b>Recently deleted</b> on the start screen, where you can restore it. Nothing is erased until someone chooses <b>Delete forever</b> there.</p>
+        ${ws.cloud ? '<p>This only affects <b>this device</b>. The team’s copy in the Google Sheet is not deleted.</p>' : '<p><b>Tip:</b> download a backup first — it is the only copy outside this browser.</p>'}`,
+      actions: [
+        { label: 'Download backup first', value: 'backup' },
+        { label: 'Cancel', value: 'cancel' },
+        { label: 'Yes, move to Recently deleted', value: 'trash', cls: 'danger' },
+      ],
+    });
+    if (res === 'backup') {
+      backup();
+      continue;
+    }
+    if (res !== 'trash') return;
+    break;
+  }
+  if (state.sync) state.sync.close(), (state.sync = null);
+  state.syncStatus = null;
+  ws.deletedAt = Date.now();
+  await db.putWorkspace(ws);
+  state.ws = null;
+  state.scans = [];
+  state.byId = new Map();
+  toast(`“${ws.name}” moved to Recently deleted — restore it from the list below if needed`, 6000);
+  await showStartScreen();
+}
+
+// Step 2: permanent delete, only from Recently deleted, after typing the name.
+async function purgeProject(id) {
+  const ws = await db.getWorkspace(id);
+  if (!ws) return;
+  const n = await db.countScans(id);
+  const res = await dialog({
+    title: 'Delete forever?',
+    body: `<div class="warn-box"><b class="big">⚠ This cannot be undone.</b><br>
+      “${esc(ws.name)}” and its <b>${n.toLocaleString()} scans</b> will be permanently erased from this device.</div>
+      <label class="field mt"><span>Type the project name <b>${esc(ws.name)}</b> to confirm</span><input id="purgeName" autocomplete="off"></label>`,
+    actions: [{ label: 'Cancel', value: 'cancel' }, { label: 'Delete forever', value: 'purge', cls: 'danger' }],
+    bind(root) {
+      const btn = root.querySelector('button[value=purge]');
+      const inp = root.querySelector('#purgeName');
+      btn.disabled = true;
+      inp.addEventListener('input', () => (btn.disabled = inp.value.trim() !== ws.name.trim()));
+      setTimeout(() => inp.focus(), 50);
+    },
+  });
+  if (res !== 'purge') return;
+  await db.deleteWorkspace(id);
+  toast(`“${ws.name}” permanently deleted`);
+  await showStartScreen();
 }
 
 // ------------------------------------------------------- import/export ----
@@ -1258,7 +1394,14 @@ function setView(v) {
 
 function bind() {
   $$('.tabs button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-  $('#wsButton').addEventListener('click', workspaceMenu);
+  $('#wsButton').addEventListener('click', showStartScreen);
+  $('#startScreen').addEventListener('click', onStartClick);
+  $('#startScreen').addEventListener('change', (e) => {
+    if (e.target.dataset.start !== 'restorefile') return;
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) restore(f);
+  });
   $('#syncPill').addEventListener('click', () => setView('settings'));
 
   // scan
@@ -1364,6 +1507,7 @@ function bind() {
   // Keep a hardware scanner's keystrokes from getting lost: typing anywhere on
   // the Scan tab goes into the scan box.
   document.addEventListener('keydown', (e) => {
+    if (!state.ws) return;
     const t = e.target;
     const typing = t.matches && t.matches('input, textarea, select, [contenteditable]');
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing && state.view === 'scan') {
@@ -1490,20 +1634,12 @@ function bind() {
   $('#clearScansBtn').addEventListener('click', async () => {
     const n = state.scans.length;
     if (!n) return toast('No scans to delete');
-    const typed = prompt(`This deletes all ${n.toLocaleString()} scans in project “${state.ws.name}”${state.ws.cloud ? ' for EVERYONE on the team' : ''}. Type DELETE to confirm.`);
+    const typed = prompt(`⚠ WARNING: this permanently deletes all ${n.toLocaleString()} scans in project “${state.ws.name}”${state.ws.cloud ? ' for EVERYONE on the team' : ''}. This cannot be undone — download a backup first if you might need them.\n\nType DELETE to confirm.`);
     if (typed !== 'DELETE') return;
     await commit([], state.scans.map((s) => s.id));
     toast('All scans deleted');
   });
-  $('#deleteWsBtn').addEventListener('click', async () => {
-    if (!confirm(`Remove “${state.ws.name}” from this device?${state.ws.cloud ? ' The team copy stays in the Google Sheet; you can re-join with the link.' : ' Download a backup first if you need the data.'}`)) return;
-    const id = state.ws.id;
-    if (state.sync) state.sync.close(), (state.sync = null);
-    await db.deleteWorkspace(id);
-    const rest = await db.listWorkspaces();
-    if (rest.length) await openWorkspace(rest[0].id);
-    else await createWorkspace('My Project');
-  });
+  $('#deleteWsBtn').addEventListener('click', trashProject);
   $('#syncBody').addEventListener('click', async (e) => {
     const id = e.target.id;
     if (id === 'copyLink') {
@@ -1568,6 +1704,10 @@ function bind() {
         sortScans();
       } else if (e.data.type === 'ws') {
         const ws = await db.getWorkspace(state.ws.id);
+        if (ws && ws.deletedAt) {
+          state.ws = null;
+          return showStartScreen();
+        }
         if (ws) state.ws = { ...ws, settings: { ...state.ws.settings, ...ws.settings } };
       }
       scheduleRender();
@@ -1602,12 +1742,8 @@ async function boot() {
     return;
   }
   const join = readJoinLink(location.hash);
-  const all = await db.listWorkspaces();
-  const last = LS.get('lastWs');
-  if (all.length) await openWorkspace(all.some((w) => w.id === last) ? last : all[0].id);
-  else await createWorkspace('My Project');
-  const v = location.hash.replace('#', '');
-  setView(['scan', 'trays', 'find', 'dashboard', 'log', 'settings'].includes(v) ? v : 'scan');
+  // Every visit starts by choosing: create a project or open an existing one.
+  await showStartScreen();
   if (join) await promptJoin(join);
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
