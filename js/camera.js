@@ -4,8 +4,10 @@
 
 import { loadScript } from './load.js';
 import { pickCodes } from './codepick.js';
+import { parseScan } from './parser.js';
 
-const FORMATS = ['qr_code', 'data_matrix', 'code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'pdf417', 'aztec'];
+// The codes found on memory module labels. Fewer formats = faster, fewer false reads.
+const FORMATS = ['data_matrix', 'qr_code', 'code_128', 'code_93', 'code_39'];
 
 // Part of the frame we read: the centre, matching the guide box drawn on screen.
 const CROP = { x: 0.08, y: 0.12, w: 0.84, h: 0.76 };
@@ -35,7 +37,7 @@ async function getNative() {
   try {
     const supported = await window.BarcodeDetector.getSupportedFormats();
     const formats = FORMATS.filter((f) => supported.includes(f));
-    if (!formats.includes('qr_code') || !formats.includes('code_128')) return null;
+    if (!formats.includes('data_matrix') || !formats.includes('code_128')) return null;
     return new window.BarcodeDetector({ formats });
   } catch {
     return null;
@@ -109,6 +111,13 @@ export class CameraScanner {
     v.srcObject = this.stream;
     await v.play().catch(() => {});
     await this.focus('continuous');
+    // Phones can't focus closer than ~10–20 cm; a 2× zoom lets you hold the phone there and still
+    // get a big, sharp code (the trick dedicated barcode apps use).
+    const caps = this.capabilities();
+    if (caps.zoom && caps.zoom.max >= 1.5) {
+      const want = Number(localStorage.getItem('ddr.camZoom')) || Math.min(2, caps.zoom.max);
+      await this.setZoom(Math.max(caps.zoom.min, Math.min(caps.zoom.max, want)));
+    }
     this.native = await getNative();
     this.engine = this.native ? 'built-in reader' : 'ZXing';
     if (!this.native) await getZxing();
@@ -214,6 +223,20 @@ export class CameraScanner {
   // Combine what is visible over the last moment into one decision.
   consider(texts) {
     const now = Date.now();
+    // One label = one scan, like a checkout: after adding, ignore everything on this label until
+    // the view is clear for a moment, or a different module's full code shows up.
+    if (this.lock) {
+      const fresh = texts.find((t) => /\(S\)/i.test(t) && !this.used.has(t) && parseScan(t, this.rules).serial !== this.lock.serial);
+      if (fresh) this.lock = null;
+      else if (texts.length) this.lock.clearSince = 0;
+      else if (!this.lock.clearSince) this.lock.clearSince = now;
+      else if (now - this.lock.clearSince > 450) this.lock = null;
+      if (this.lock) {
+        for (const t of texts) this.used.set(t, now);
+        this.onStatus('added');
+        return;
+      }
+    }
     for (const t of texts) {
       const s = this.seen.get(t);
       if (s && now - s.last < 700) s.last = now;
@@ -235,6 +258,8 @@ export class CameraScanner {
     if (d.action === 'add') {
       for (const t of visible) this.used.set(t, now);
       this.lastAsk = '';
+      this.lock = { serial: parseScan(d.raw, this.rules).serial, clearSince: 0 };
+      this.seen.clear();
       this.onPick(d.raw, d.how);
     } else if (d.action === 'ask') {
       const key = visible.join('|');

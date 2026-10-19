@@ -128,18 +128,46 @@ test('camera: picking which code(s) on a label to use', async () => {
   assert.equal(looksLikePart('KSM32RD8/16HDR'), true);
   // tagged QR wins even if other codes are visible
   assert.deepEqual(pickCodes(['S999', '(L)16GB (S)S1 (P)M393A2K43DB2-CTD']), { action: 'add', raw: '(L)16GB (S)S1 (P)M393A2K43DB2-CTD', how: 'tagged' });
-  // separate part + serial barcodes are combined
-  const c = pickCodes(['M393A2K43DB2-CTD', '3829ABCD1234']);
+  // separate part + serial barcodes are combined (after giving a 2D code a moment)
+  assert.equal(pickCodes(['M393A2K43DB2-CTD', '3829ABCD1234']).action, 'wait');
+  const c = pickCodes(['M393A2K43DB2-CTD', '3829ABCD1234'], { aloneMs: 1100 });
   assert.equal(c.action, 'add');
   assert.equal(c.raw, '(S)3829ABCD1234 (P)M393A2K43DB2-CTD');
   // free text code
-  assert.equal(pickCodes(['M393A2K43DB2-CTD 16GB 2Rx8']).raw, 'M393A2K43DB2-CTD 16GB 2Rx8');
+  assert.equal(pickCodes(['M393A2K43DB2-CTD 16GB 2Rx8'], { aloneMs: 1100 }).raw, 'M393A2K43DB2-CTD 16GB 2Rx8');
   // part alone waits briefly for a serial, then adds
   assert.equal(pickCodes(['HMA84GR7CJR4N-VK']).action, 'wait');
-  assert.equal(pickCodes(['HMA84GR7CJR4N-VK'], { aloneMs: 1000 }).action, 'add');
+  assert.equal(pickCodes(['HMA84GR7CJR4N-VK'], { aloneMs: 1500 }).action, 'add');
   // serial alone never gets added as a part number on its own
   assert.equal(pickCodes(['3829ABCD1234']).action, 'wait');
   assert.equal(pickCodes(['3829ABCD1234'], { aloneMs: 2000 }).action, 'ask');
   // two different parts in view
-  assert.equal(pickCodes(['M393A2K43DB2-CTD', 'HMA84GR7CJR4N-VK']).action, 'ask');
+  assert.equal(pickCodes(['M393A2K43DB2-CTD', 'HMA84GR7CJR4N-VK'], { aloneMs: 1100 }).action, 'ask');
+});
+
+test('real labels: Samsung and Micron DDR5 RDIMM data matrix codes', () => {
+  const sam = parseScan('(L)64GB 2Rx4 PC5-6400B-RA1-1312-XT(S)80CE04260743907554(P)MDRR644QDBC2-3L000(M)H0D8000');
+  assert.deepEqual([sam.part, sam.serial, sam.label, sam.brand, sam.gen, sam.genInferred], ['MDRR644QDBC2-3L000', '80CE04260743907554', '64GB 2Rx4 PC5-6400B-RA1-1312-XT', 'Samsung', 'DDR5', false]);
+  const mic = parseScan('(L)64GB 2RX4 PC5-6400B-RA1-1312-XT(S)802C1A2634D45ED77D(P)MTC40F2046S1RC64BH1(c)QSFF');
+  assert.deepEqual([mic.part, mic.serial, mic.brand, mic.gen], ['MTC40F2046S1RC64BH1', '802C1A2634D45ED77D', 'Micron', 'DDR5']);
+  // GS separators inside a 2D code
+  assert.equal(parseScan('(S)802C1A26\u001d(P)MTC40F2046S1RC64BH1').part, 'MTC40F2046S1RC64BH1');
+  // DDR4 label text
+  assert.equal(parseScan('(L)32GB 2Rx4 PC4-3200AA-RB2-12 (S)80AD01223344556677 (P)HMA84GR7DJR4N-XN').brand, 'SK Hynix');
+  assert.equal(parseScan('(L)32GB 2Rx4 PC4-3200AA-RB2-12 (P)XYZ1').gen, 'DDR4');
+});
+
+test('camera: real Micron/Samsung labels prefer the full 2D code over the other codes in view', async () => {
+  const { pickCodes } = await import('../js/codepick.js');
+  const dm = '(L)64GB 2RX4 PC5-6400B-RA1-1312-XT(S)802C1A2634D45ED77D(P)MTC40F2046S1RC64BH1(c)QSFF';
+  // only the 1D barcode + chip codes seen so far: wait for the label's 2D code
+  assert.equal(pickCodes(['MTC40F2046S1RC64BH1 634', '2611A1UGB9']).action, 'wait');
+  assert.deepEqual(pickCodes(['MTC40F2046S1RC64BH1 634', '2611A1UGB9', dm]), { action: 'add', raw: dm, how: 'tagged' });
+  // if the 2D code never reads, fall back to the 1D barcode's part number
+  const fb = pickCodes(['MTC40F2046S1RC64BH1 634'], { aloneMs: 1200 });
+  assert.equal(fb.action, 'add');
+  assert.equal(parseScan(fb.raw).part, 'MTC40F2046S1RC64BH1');
+  // Samsung 1D Code 93 "VN <part> <date>" + JEDEC serial barcode
+  const sam = pickCodes(['0532388636040291', '80CE04260743907554', 'M321R8GA0BB0-CQK'], { aloneMs: 1200 });
+  assert.equal(sam.raw, '(S)80CE04260743907554 (P)M321R8GA0BB0-CQK');
 });

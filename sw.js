@@ -1,6 +1,6 @@
 // Offline support: network first (so updates arrive immediately), falling
 // back to the cached copy when the network is unavailable.
-const CACHE = 'ddr-tray-scanner-v4';
+const CACHE = 'ddr-tray-scanner-v5';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/parser.js', 'js/trays.js', 'js/store.js', 'js/sync.js', 'js/excel.js', 'js/defaults.js', 'js/load.js', 'js/camera.js', 'js/codepick.js', 'vendor/barcode-detector.js', 'vendor/zxing_reader.wasm', 'vendor/xlsx-js-style.min.js', 'gsheet/Code.gs', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

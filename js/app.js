@@ -1136,8 +1136,10 @@ async function startCamera() {
     onPick: async (raw, how) => {
       await handleScan(raw);
       const r = state.lastResult && state.byId.get(state.lastResult.id);
+      const ok = r && r.status === 'placed';
       const where = r && r.tray != null ? `Tray <b>${r.tray}</b>` : r ? esc(STATUS_TEXT[r.status] || r.status) : '';
-      camStatus(`✓ Read ${how === 'combined' ? 'part + serial barcodes' : 'label'} → ${where}. Move the label away and show the next one.`, r && r.status === 'placed' ? 'ok' : 'bad');
+      camStatus(`✓ ${esc(r ? r.part || '' : '')} → ${where}${how === 'combined' ? ' (part + serial barcodes)' : ''} — next stick`, ok ? 'ok' : 'bad');
+      camFlash(r);
     },
     onStatus: (kind, info) => {
       if (kind === 'ask') {
@@ -1145,7 +1147,8 @@ async function startCamera() {
         camStatus(`Read <b class="mono">${esc(info.raw)}</b> — ${esc(info.reason)}. If this label has a separate part-number barcode, show it too.<br>
           <button type="button" class="btn small" data-cam="addanyway">Add anyway</button><button type="button" class="btn small" data-cam="ignore">Ignore</button>`, 'warn');
       } else if (kind === 'part-only') camStatus('Part number read — looking for the serial barcode…');
-      else if (kind === 'reading') camStatus('Code seen — reading…');
+      else if (kind === 'reading') camStatus('Code seen — reading the label…');
+      // 'added' (still on the same label): keep showing what was just added.
       else if (kind === 'looking') camStatus(`Point at the label · reader: ${esc(scanner.engine)}`);
     },
   });
@@ -1180,6 +1183,21 @@ async function setupCamControls(scanner) {
     $('#camZoomWrap').hidden = false;
   } else $('#camZoomWrap').hidden = true;
   $('#camTorch').hidden = !caps.torch;
+}
+
+// Big tray number over the camera picture, so nobody has to look away from the label.
+let flashTimer = null;
+function camFlash(r) {
+  const el = $('#camFlash');
+  if (!r) return;
+  const ok = r.status === 'placed';
+  el.className = 'cam-flash' + (ok ? '' : ' bad');
+  el.innerHTML = ok
+    ? `<div class="s">TRAY</div><div class="n">${esc(r.tray)}</div><div class="s">${esc(r.brand)} · ${esc(r.gen || '')} · ${esc(r.part)}</div>`
+    : `<div class="n" style="font-size:clamp(28px,8vw,52px)">${esc(STATUS_TEXT[r.status] || r.status)}</div><div class="s">${esc(r.serial || r.part || '')}</div>`;
+  el.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (el.hidden = true), ok ? 1600 : 2600);
 }
 
 function stopCamera() {
@@ -1302,7 +1320,10 @@ function bind() {
     stopCamera();
     await startCamera();
   });
-  $('#camZoom').addEventListener('input', (e) => cam && cam.setZoom(Number(e.target.value)));
+  $('#camZoom').addEventListener('input', (e) => {
+    LS.set('camZoom', Number(e.target.value));
+    if (cam) cam.setZoom(Number(e.target.value));
+  });
   $('#camTorch').addEventListener('click', (e) => {
     if (!cam) return;
     const on = !e.target.dataset.on;

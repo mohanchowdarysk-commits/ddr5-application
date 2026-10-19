@@ -56,6 +56,7 @@
           <video id="camVideo" playsinline muted></video>
           <canvas id="camOverlay"></canvas>
           <div class="cam-guide" aria-hidden="true"></div>
+          <div class="cam-flash" id="camFlash" hidden></div>
         </div>
         <div id="camStatus" class="cam-status" aria-live="polite">Starting camera…</div>
         <div class="row gap wrap cam-controls">
@@ -64,7 +65,7 @@
           <button type="button" id="camTorch" class="btn" hidden>🔦 Light</button>
           <button type="button" id="cameraStop" class="btn">Stop camera</button>
         </div>
-        <p class="muted small cam-tips">Tips: hold the label 8–15 cm away inside the box, keep it flat and well lit, tap the picture to refocus. If a label has separate part-number and serial barcodes, show both at once. For tiny labels, 📸 Photo is the most reliable.</p>
+        <p class="muted small cam-tips">Tips: aim at the small square code on the label. Hold the phone about 15–20 cm away (2× zoom is set automatically where supported) so it can focus; tap the picture to refocus. The tray number pops up on the picture, then just show the next stick. Fastest of all: a 2D handheld scanner (see Settings help).</p>
       </div>
 
       <div id="result" class="result card idle" aria-live="assertive">
@@ -188,6 +189,15 @@
       <div class="card" id="syncCard">
         <h2>Team sharing</h2>
         <div id="syncBody"></div>
+      </div>
+
+      <div class="card">
+        <h2>Fastest scanning (like a store checkout)</h2>
+        <ul class="steps small">
+          <li><b>Aim at the small square code</b> (Data Matrix) on the module label. It holds the part number, serial and size in one read — the long barcode and the tiny codes on the chips are ignored.</li>
+          <li><b>Best: a 2D handheld barcode scanner</b> (“2D imager”, USB or Bluetooth, about $25–60). It must say <b>2D / Data Matrix</b> — 1D laser scanners can’t read these labels. Plug it into the PC (or pair it with a phone/tablet in keyboard mode), open the Scan tab and pull the trigger: each read is placed in a tray instantly, no clicks.</li>
+          <li><b>Phone camera:</b> press 📷 Camera once and keep showing sticks one after another. Hold the phone 15–20 cm away so it can focus; the tray number pops up on the picture. Android phones with Chrome read fastest (built-in reader).</li>
+        </ul>
       </div>
 
       <div class="card">

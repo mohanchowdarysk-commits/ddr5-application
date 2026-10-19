@@ -22,18 +22,36 @@ function collapse(s) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// Text after `tag` up to the earliest of `endTags` (all case-insensitive).
-function between(raw, tag, endTags) {
-  const upper = raw.toUpperCase();
-  const i = upper.indexOf(tag);
+// Label fields are tagged with a letter in brackets: (L) label, (S) serial,
+// (P) part, (M)/(c)/… extra info. A field runs until the next tag.
+const NEXT_TAG = /\([A-Za-z]\)/;
+
+function untilNextTag(s) {
+  const m = NEXT_TAG.exec(s);
+  return m ? { text: s.slice(0, m.index), tagged: true } : { text: s, tagged: false };
+}
+
+// Text after `tag` up to the next tag (case-insensitive).
+function between(raw, tag) {
+  const i = raw.toUpperCase().indexOf(tag);
   if (i < 0) return '';
-  const start = i + tag.length;
-  let end = raw.length;
-  for (const t of endTags) {
-    const j = upper.indexOf(t, start);
-    if (j >= 0 && j < end) end = j;
-  }
-  return collapse(raw.slice(start, end));
+  return collapse(untilNextTag(raw.slice(i + tag.length)).text);
+}
+
+// The first characters of a JEDEC module serial number identify the maker.
+export const SERIAL_MAKERS = [
+  { prefix: '80CE', brand: 'Samsung' },
+  { prefix: '802C', brand: 'Micron' },
+  { prefix: '80AD', brand: 'SK Hynix' },
+  { prefix: '0198', brand: 'Kingston' },
+  { prefix: '859B', brand: 'Crucial' },
+];
+
+export function brandFromSerial(serial) {
+  const s = String(serial || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{12,}$/.test(s)) return '';
+  const m = SERIAL_MAKERS.find((x) => s.startsWith(x.prefix));
+  return m ? m.brand : '';
 }
 
 export function parsePart(raw) {
@@ -48,9 +66,10 @@ export function parsePart(raw) {
     if (tokens.length > 1 && tokens[0].length <= 2) return tokens[1];
     return tokens[0];
   }
-  const rest = collapse(s.slice(p + 3, p + 3 + 80));
-  const m = rest.toUpperCase().indexOf('(M)');
-  if (m >= 0) return rest.slice(0, m).trim();
+  // Up to the next tag such as (M) or (c); without one, the first word (workbook rule).
+  const seg = untilNextTag(s.slice(p + 3, p + 3 + 80));
+  const rest = collapse(seg.text);
+  if (seg.tagged) return rest;
   return rest.split(' ')[0] || '';
 }
 
@@ -75,6 +94,9 @@ export function detectGen(part, raw) {
   for (const g of ['DDR5', 'DDR3', 'DDR4']) {
     if (R.includes(g) || P.includes(g)) return { gen: g, inferred: false };
   }
+  // JEDEC module names on the label: PC5-6400B = DDR5, PC4-3200AA = DDR4, PC3L-12800R = DDR3.
+  const pc = /(?:^|[^A-Z0-9])PC([345])L?-\d{4,5}/.exec(R);
+  if (pc) return { gen: 'DDR' + pc[1], inferred: false };
   const g = inferGen(P);
   return g ? { gen: g, inferred: true } : { gen: '', inferred: false };
 }
@@ -99,11 +121,22 @@ export function inferGen(P) {
   return '';
 }
 
+// The serial number's maker code is the most reliable source; part-number rules
+// fill in when there is no serial (Crucial modules carry Micron's maker code).
+function pickBrand(part, text, serial, rules) {
+  const byPart = part || /crucial/i.test(text) ? detectBrand(part, text, rules) : 'Unknown';
+  const bySerial = brandFromSerial(serial);
+  if (!bySerial) return byPart;
+  if (byPart === 'Crucial' && bySerial === 'Micron') return byPart;
+  return bySerial;
+}
+
 export function parseScan(raw, rules = DEFAULT_BRAND_RULES) {
-  const text = String(raw || '').replace(/[\r\n\t]+/g, ' ').trim();
+  // Control characters (GS/RS separators some 2D codes use, line breaks) become spaces.
+  const text = String(raw || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   const part = parsePart(text).toUpperCase();
-  const label = between(text, '(L)', ['(S)', '(P)', '(M)']);
-  const serial = between(text, '(S)', ['(P)', '(M)', '(L)']);
+  const label = between(text, '(L)');
+  const serial = between(text, '(S)');
   const { gen, inferred } = detectGen(part, text);
   return {
     raw: text,
@@ -112,6 +145,6 @@ export function parseScan(raw, rules = DEFAULT_BRAND_RULES) {
     serial,
     gen,
     genInferred: inferred,
-    brand: part || /crucial/i.test(text) ? detectBrand(part, text, rules) : 'Unknown',
+    brand: pickBrand(part, text, serial, rules),
   };
 }
