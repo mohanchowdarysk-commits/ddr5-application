@@ -16,9 +16,14 @@
       <svg viewBox="0 0 24 24" aria-hidden="true" class="logo"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M5 17v3M9 17v3M13 17v3M17 17v3M6 10h3v4H6zM11 10h3v4h-3zM16 10h2v4h-2z"/></svg>
       <span>DDR Tray Scanner</span>
     </div>
-    <button id="wsButton" class="ws-button" title="Switch or create a project"><span id="wsName">…</span> <span aria-hidden="true">▾</span></button>
+    <div class="pm-wrap">
+      <button id="wsButton" class="ws-button" title="Switch project" aria-haspopup="menu" aria-expanded="false"><span id="wsName">…</span> <span aria-hidden="true">▾</span></button>
+      <div id="projMenu" class="proj-menu" role="menu" hidden></div>
+    </div>
     <span id="syncPill" class="pill" hidden></span>
   </header>
+  <div id="updateBar" class="notice-bar" hidden>A new version of the app is ready. <button class="btn small primary" id="reloadBtn">Reload now</button></div>
+  <div id="backupNag" class="notice-bar" hidden></div>
 
   <nav class="tabs" role="tablist">
     <button role="tab" data-view="scan" aria-selected="true">Scan</button>
@@ -129,6 +134,7 @@
     <!-- DASHBOARD -->
     <section id="view-dashboard" class="view" hidden>
       <div id="kpis" class="kpis"></div>
+      <div class="card" id="healthCard"><h2>Data check</h2><div id="health"></div></div>
       <div class="dash-grid">
         <div class="card"><h2>Sticks by brand</h2><div id="byBrand"></div></div>
         <div class="card"><h2>Sticks by generation</h2><div id="byGen"></div></div>
@@ -212,7 +218,8 @@
         <div class="row gap wrap">
           <label class="btn file-btn">Import from Excel (.xlsx)<input type="file" id="importXlsx" accept=".xlsx,.xlsm,.xls" hidden></label>
           <button id="exportXlsxBtn2" class="btn">Export Excel</button>
-          <button id="backupBtn" class="btn">Download backup (.json)</button>
+          <button id="backupBtn" class="btn">Back up this project (.json)</button>
+          <button id="backupAllBtn" class="btn">Back up ALL projects (.json)</button>
           <label class="btn file-btn">Restore backup<input type="file" id="restoreFile" accept=".json" hidden></label>
         </div>
         <p class="muted small">Import reads the original DDR MultiScanner workbook (sheets named like “1-100”, scans in column B) or a file exported from this app, and places every scan in order.</p>
@@ -223,6 +230,11 @@
         <p class="muted small">Part numbers that <b>start with</b> a prefix win first; then the “contains” list is checked in order (the original workbook's rule). One rule per line: <code>Brand | prefixes | contains</code>, values comma-separated.</p>
         <textarea id="rulesInput" rows="7" spellcheck="false"></textarea>
         <div class="row gap mt"><button id="saveRulesBtn" class="btn primary">Save rules</button><button id="resetRulesBtn" class="btn">Reset to default</button></div>
+      </div>
+
+      <div class="card">
+        <h2>About &amp; diagnostics</h2>
+        <div id="aboutInfo"></div>
       </div>
 
       <div class="card danger-zone">

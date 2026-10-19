@@ -2,6 +2,7 @@ import { parseScan, BRANDS, DEFAULT_BRAND_RULES } from './parser.js';
 import { makePlacer, traySummary, groupCount, rangeProblems, isBlankSerial, capOf } from './trays.js';
 import { newWorkspace, uid, shortId, stationsForMembers } from './defaults.js';
 import * as db from './store.js';
+import { APP_VERSION } from './version.js';
 import { SheetSync, makeJoinLink, readJoinLink, scanToRow, rowToScan, setupScript } from './sync.js';
 import { exportWorkbook, readScansFromWorkbook, downloadText, scansToCsv, fmtTime, STATUS_TEXT } from './excel.js';
 
@@ -153,10 +154,17 @@ function applyToMemory(upserts, deletes) {
   sortScans();
 }
 
+// Save to this device first; only then update the screen. If the device refuses
+// to save (storage full, private mode), nothing pretends to be saved.
 async function commit(upserts, deletes = []) {
+  try {
+    await db.putScans(upserts);
+    await db.deleteScans(deletes);
+  } catch (e) {
+    reportError(e, 'save');
+    throw new SaveError(e);
+  }
   applyToMemory(upserts, deletes);
-  await db.putScans(upserts);
-  await db.deleteScans(deletes);
   if (state.sync) {
     const ops = [
       ...deletes.map((id) => ({ kind: 'delete', id })),
@@ -205,6 +213,23 @@ function makeRecord(parsed, d, station) {
 
 // ---------------------------------------------------------------- scan ----
 
+class SaveError extends Error {
+  constructor(cause) {
+    super('Could not save on this device: ' + ((cause && cause.message) || cause));
+    this.cause = cause;
+  }
+}
+
+function showSaveFailure(e) {
+  const box = $('#result');
+  box.className = 'result card bad';
+  box.innerHTML = `<div class="result-main"><div class="result-kicker">NOT SAVED</div><div class="result-tray">✕</div>
+    <div class="result-msg">This scan could not be saved on this device (${esc((e.cause && e.cause.name) || 'storage error')}). Do not place the stick yet.
+    ${/quota/i.test(String(e.cause && (e.cause.name + e.cause.message))) ? 'The device storage is full — export and delete old projects, then scan again.' : 'Close other tabs of this app and try again. Private/incognito windows can block saving.'}</div></div>`;
+  beep('bad');
+  speak('Not saved');
+}
+
 async function handleScan(raw) {
   raw = String(raw || '').trim();
   if (!raw || !state.ws) return;
@@ -213,7 +238,12 @@ async function handleScan(raw) {
   const placer = makePlacer(state.scans, state.ws.settings);
   const d = placer.place(parsed, station);
   const rec = makeRecord(parsed, d, station);
-  await commit([rec]);
+  try {
+    await commit([rec]);
+  } catch (e) {
+    if (e instanceof SaveError) return showSaveFailure(e);
+    throw e;
+  }
   showResult(rec, d);
 }
 
@@ -583,6 +613,12 @@ function renderDashboard() {
   $('#byGen').innerHTML = bars(groupCount(state.scans, 'gen'), genColor, placed.length);
   const byStation = state.ws.stations.map((st) => [st.name, placed.filter((s) => s.stationId === st.id).length]).filter((e) => e[1] > 0);
   $('#byStation').innerHTML = bars(byStation, null, placed.length);
+  const issues = healthIssues();
+  $('#health').innerHTML = issues.length
+    ? issues.map((i) => `<div class="health-item"><span class="st ${i.kind === 'bad' ? 'duplicate' : 'shipped'}">${i.kind === 'bad' ? '⚠' : 'ℹ'}</span><span>${esc(i.text)}</span>
+        ${(i.trays || []).slice(0, 12).map((t) => `<span class="chip no-dot" data-tray="${t}">Tray ${t}</span>`).join('')}
+        ${(i.serials || []).slice(0, 8).map((x) => `<span class="chip no-dot" data-find="${esc(x)}">${esc(x)}</span>`).join('')}</div>`).join('')
+    : '<p class="st placed">✓ All good — no mixed trays, no double serials, nothing over the limit.</p>';
   $('#byPart').innerHTML = bars(groupCount(state.scans, 'part').slice(0, 15), null, placed.length, (k) => `data-find="${esc(k)}" style="cursor:pointer"`);
 }
 
@@ -685,6 +721,7 @@ function renderSettings() {
   $('#capacityInput').disabled = unlimited;
   if (document.activeElement !== $('#capacityInput')) $('#capacityInput').value = unlimited ? '' : capOf(ws.settings);
   renderStorageInfo();
+  renderAbout();
   $('#dupSerialInput').checked = !!ws.settings.allowDuplicateSerials;
   $('#soundInput').checked = LS.get('sound', true);
   $('#voiceInput').checked = LS.get('voice', false);
@@ -790,6 +827,7 @@ async function openWorkspace(id) {
   state.logPage = 0;
   resetResult();
   render();
+  checkBackupNag();
   if (ws.cloud) startSync().catch((e) => console.error(e));
 }
 
@@ -1061,7 +1099,8 @@ async function showStartScreen() {
     ${state.ws && !state.ws.deletedAt ? `<button class="btn" data-start="back">← Back to “${esc(state.ws.name)}”</button>` : ''}
     ${trashed.length ? `<details class="card trash"><summary>Recently deleted (${trashed.length}) — can be restored</summary><div class="mt">${trashed.map(trashRow).join('')}</div>
       <p class="muted small">Projects here are kept until you choose “Delete forever”. They are never removed automatically.</p></details>` : ''}
-    <p class="muted small">Projects are saved in this browser on this device. Team projects are also saved in your team’s Google Sheet.</p>`;
+    <p class="muted small">Projects are saved in this browser on this device. Team projects are also saved in your team’s Google Sheet.
+      ${all.length ? '<button class="btn small" data-start="backupall">💾 Back up all projects</button>' : ''} · Version ${esc(APP_VERSION)}</p>`;
 }
 
 async function onStartClick(e) {
@@ -1090,6 +1129,8 @@ async function onStartClick(e) {
     await showStartScreen();
   } else if (act === 'purge') {
     await purgeProject(id);
+  } else if (act === 'backupall') {
+    await backupAll();
   }
 }
 
@@ -1134,10 +1175,12 @@ async function purgeProject(id) {
   const ws = await db.getWorkspace(id);
   if (!ws) return;
   const n = await db.countScans(id);
+  const unsent = ws.cloud ? (await db.outboxList(id)).length : 0;
   const res = await dialog({
     title: 'Delete forever?',
     body: `<div class="warn-box"><b class="big">⚠ This cannot be undone.</b><br>
       “${esc(ws.name)}” and its <b>${n.toLocaleString()} scans</b> will be permanently erased from this device.</div>
+      ${unsent ? `<p class="warn-text"><b>${plural(unsent, 'change')} of this team project have not reached the Google Sheet yet</b> and would be lost. Connect to the internet and wait for them to upload first.</p>` : ''}
       <label class="field mt"><span>Type the project name <b>${esc(ws.name)}</b> to confirm</span><input id="purgeName" autocomplete="off"></label>`,
     actions: [{ label: 'Cancel', value: 'cancel' }, { label: 'Delete forever', value: 'purge', cls: 'danger' }],
     bind(root) {
@@ -1204,11 +1247,31 @@ async function importExcel(file) {
   toast(`Imported ${recs.length.toLocaleString()} scans`, 5000);
 }
 
+function backupFileName(name) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${name.replace(/[^\w-]+/g, '_')}_backup_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.json`;
+}
+
 function backup() {
-  const data = { format: 'ddr-tray-scanner', version: 1, exportedAt: new Date().toISOString(), workspace: { ...state.ws, cloud: null }, scans: state.scans };
-  downloadText(`${state.ws.name.replace(/[^\w-]+/g, '_')}_backup.json`, JSON.stringify(data));
+  const data = { format: 'ddr-tray-scanner', version: 2, app: APP_VERSION, exportedAt: new Date().toISOString(), projects: [{ workspace: { ...state.ws, cloud: null }, scans: state.scans }] };
+  downloadText(backupFileName(state.ws.name), JSON.stringify(data));
   LS.set('backup.' + state.ws.id, Date.now());
+  hideBackupNag();
   if (state.view === 'settings') renderStorageInfo();
+}
+
+// Every project on this device (including Recently deleted) in one file.
+async function backupAll() {
+  const all = await db.listWorkspaces();
+  if (!all.length) return toast('No projects to back up');
+  const projects = [];
+  for (const w of all) projects.push({ workspace: { ...w, cloud: null }, scans: await db.getScans(w.id) });
+  downloadText(backupFileName('All_projects'), JSON.stringify({ format: 'ddr-tray-scanner', version: 2, app: APP_VERSION, exportedAt: new Date().toISOString(), projects }));
+  const now = Date.now();
+  for (const w of all) LS.set('backup.' + w.id, now);
+  hideBackupNag();
+  toast(`Backed up ${plural(all.length, 'project')} (${plural(projects.reduce((n, p) => n + p.scans.length, 0), 'scan')})`);
 }
 
 async function restore(file) {
@@ -1218,12 +1281,172 @@ async function restore(file) {
   } catch {
     return toast('Not a valid backup file');
   }
-  if (data.format !== 'ddr-tray-scanner' || !data.workspace) return toast('Not a DDR Tray Scanner backup');
-  const ws = { ...newWorkspace(), ...data.workspace, id: newWorkspace().id, cloud: null, name: data.workspace.name + ' (restored)' };
-  await db.putWorkspace(ws);
-  await db.putScans((data.scans || []).map((s) => ({ ...s, id: uid(), wsId: ws.id })));
-  await openWorkspace(ws.id);
-  toast(`Restored ${(data.scans || []).length.toLocaleString()} scans into a new project`);
+  if (data.format !== 'ddr-tray-scanner') return toast('Not a DDR Tray Scanner backup');
+  const items = data.projects || (data.workspace ? [{ workspace: data.workspace, scans: data.scans }] : []);
+  if (!items.length) return toast('This backup has no projects');
+  const res = await dialog({
+    title: 'Restore backup',
+    body: `<p>This file contains ${plural(items.length, 'project')}:</p><ul>${items.map((it) => `<li><b>${esc(it.workspace.name)}</b> — ${plural((it.scans || []).length, 'scan')}</li>`).join('')}</ul>
+      <p class="small muted">Each one is added as a new project named “… (restored)”. Nothing already on this device is changed or replaced.</p>`,
+    actions: [{ label: 'Cancel', value: 'cancel' }, { label: 'Restore', value: 'ok', cls: 'primary' }],
+  });
+  if (res !== 'ok') return;
+  let first = null;
+  for (const it of items) {
+    const ws = { ...newWorkspace(), ...it.workspace, id: newWorkspace().id, cloud: null, joined: false, name: it.workspace.name + ' (restored)' };
+    delete ws.deletedAt;
+    await db.putWorkspace(ws);
+    await db.putScans((it.scans || []).map((s) => ({ ...s, id: uid(), wsId: ws.id })));
+    first = first || ws;
+  }
+  toast(`Restored ${plural(items.length, 'project')}`);
+  if (items.length === 1) await openWorkspace(first.id);
+  else await showStartScreen();
+}
+
+// Reminder for projects that exist only in this browser.
+const BACKUP_NAG_MS = 24 * 3600 * 1000;
+function checkBackupNag() {
+  const bar = $('#backupNag');
+  const ws = state.ws;
+  if (!ws || ws.cloud || !state.scans.length) return hideBackupNag();
+  const last = LS.get('backup.' + ws.id, 0);
+  const snoozed = LS.get('nagSnooze.' + ws.id, 0);
+  if (Date.now() - last < BACKUP_NAG_MS || Date.now() < snoozed) return hideBackupNag();
+  bar.innerHTML = `<span>💾 “${esc(ws.name)}” is saved only in this browser. Last backup: <b>${last ? fmtDay(last) : 'never'}</b>.</span>
+    <button class="btn small primary" data-nag="backup">Download backup</button><button class="btn small" data-nag="later">Later</button>`;
+  bar.hidden = false;
+}
+function hideBackupNag() {
+  const bar = $('#backupNag');
+  if (bar) bar.hidden = true;
+}
+
+// ---------------------------------------------------- reliability helpers ----
+
+// Recent errors are kept (on this device) so problems can be reported, and the
+// person sees a short message instead of a silently broken page.
+let lastErrorToast = 0;
+function reportError(err, where = '') {
+  const msg = String((err && (err.stack || err.message)) || err).slice(0, 600);
+  const list = LS.get('errors', []) || [];
+  list.unshift({ at: new Date().toISOString(), where, msg, v: APP_VERSION });
+  LS.set('errors', list.slice(0, 20));
+  if (Date.now() - lastErrorToast > 8000) {
+    lastErrorToast = Date.now();
+    const quota = /quota/i.test(msg);
+    toast(quota ? '⚠ Device storage is full — export and delete old projects.' : '⚠ Something went wrong. Your saved scans are safe. Details: Settings → About.', 6000);
+  }
+  if (state.view === 'settings') renderAbout();
+}
+
+async function renderAbout() {
+  const box = $('#aboutInfo');
+  if (!box) return;
+  let usage = '';
+  try {
+    const est = await navigator.storage.estimate();
+    usage = `${(est.usage / 1048576).toFixed(1)} MB used of about ${(est.quota / 1073741824).toFixed(1)} GB available`;
+  } catch {
+    usage = 'unknown';
+  }
+  const errors = LS.get('errors', []) || [];
+  box.innerHTML = `
+    <ul class="steps small">
+      <li>Version <b>${esc(APP_VERSION)}</b> · <a href="CHANGELOG.md" target="_blank">what’s new</a></li>
+      <li>Storage on this device: ${esc(usage)} · protection ${persisted ? '<b style="color:var(--good)">ON</b>' : 'not granted'}</li>
+      <li>Device id: <span class="mono">${esc(deviceId)}</span> · ${navigator.onLine ? 'online' : '<b>offline</b>'}</li>
+      <li>Recent problems: ${errors.length ? `<b>${errors.length}</b>` : 'none'}</li>
+    </ul>
+    ${errors.length ? `<details><summary class="small">Show problems</summary><pre class="diag">${esc(errors.map((e) => `${e.at} [${e.where}] v${e.v}\n${e.msg}`).join('\n\n'))}</pre></details>` : ''}
+    <div class="row gap wrap mt"><button class="btn small" id="copyDiag">Copy diagnostics</button>${errors.length ? '<button class="btn small" id="clearDiag">Clear problems</button>' : ''}</div>`;
+}
+
+// Team projects you are not looking at still upload their queued changes.
+const drainers = new Map();
+async function drainOtherProjects() {
+  if (!navigator.onLine) return;
+  let all;
+  try {
+    all = await db.listWorkspaces();
+  } catch {
+    return;
+  }
+  for (const w of all) {
+    if (!w.cloud || (state.ws && w.id === state.ws.id) || drainers.has(w.id)) continue;
+    if (!(await db.outboxList(w.id)).length) continue;
+    const s = new SheetSync({ url: w.cloud.url, key: w.cloud.key, wsId: w.id, onScans() {}, onWorkspace() {}, onStatus() {} });
+    s.live = true;
+    drainers.set(w.id, s);
+    s.flush().finally(() => {
+      s.close();
+      drainers.delete(w.id);
+    });
+  }
+}
+
+// Quick switcher under the project button.
+async function toggleProjectMenu() {
+  const menu = $('#projMenu');
+  if (!menu.hidden) return closeProjectMenu();
+  if (document.body.classList.contains('choosing')) return;
+  const all = (await db.listWorkspaces()).filter((w) => !w.deletedAt && (!state.ws || w.id !== state.ws.id));
+  all.sort((a, b) => (b.lastOpenedAt || b.updatedAt || 0) - (a.lastOpenedAt || a.updatedAt || 0));
+  const counts = new Map(await Promise.all(all.slice(0, 8).map(async (w) => [w.id, await db.countScans(w.id).catch(() => 0)])));
+  menu.innerHTML = `
+    <div class="pm-head">Current: <b>${esc(state.ws ? state.ws.name : '—')}</b></div>
+    ${all.length ? '<div class="pm-label">Switch to</div>' : '<div class="pm-empty">No other projects yet.</div>'}
+    ${all.slice(0, 8).map((w) => `<button class="pm-item" data-pm="open" data-id="${esc(w.id)}"><span class="pm-name">${esc(w.name)}</span><span class="pm-meta">${plural(counts.get(w.id) || 0, 'scan')}${w.cloud ? ' · team' : ''}</span></button>`).join('')}
+    <div class="pm-sep"></div>
+    <button class="pm-item" data-pm="new">＋ New project</button>
+    <button class="pm-item" data-pm="all">All projects & recently deleted…</button>`;
+  menu.hidden = false;
+  $('#wsButton').setAttribute('aria-expanded', 'true');
+}
+function closeProjectMenu() {
+  $('#projMenu').hidden = true;
+  $('#wsButton').setAttribute('aria-expanded', 'false');
+}
+async function onProjectMenu(e) {
+  const t = e.target.closest('[data-pm]');
+  if (!t) return;
+  closeProjectMenu();
+  if (t.dataset.pm === 'open') {
+    const view = state.view;
+    await openWorkspace(t.dataset.id);
+    setView(view === 'settings' ? 'scan' : view);
+    toast(`Switched to “${state.ws.name}”`);
+  } else if (t.dataset.pm === 'new') await newProjectWizard();
+  else await showStartScreen();
+}
+
+// Data health check (Dashboard): things that need a human to look at them.
+function healthIssues() {
+  const ws = state.ws;
+  const cap = capOf(ws.settings);
+  const issues = [];
+  const rows = traySummary(state.scans, ws.stations, cap);
+  const mixed = rows.filter((r) => r.mixed);
+  if (mixed.length) issues.push({ kind: 'bad', text: `${plural(mixed.length, 'tray')} hold more than one part number`, trays: mixed.map((r) => r.tray) });
+  const over = rows.filter((r) => r.count > cap);
+  if (over.length) issues.push({ kind: 'bad', text: `${plural(over.length, 'tray')} over the ${cap}-stick limit`, trays: over.map((r) => r.tray) });
+  const bySerial = new Map();
+  for (const s of state.scans) {
+    if (s.status !== 'placed' || isBlankSerial(s.serial)) continue;
+    const k = s.serial.toUpperCase();
+    bySerial.set(k, (bySerial.get(k) || 0) + 1);
+  }
+  const twice = [...bySerial].filter(([, n]) => n > 1).map(([k]) => k);
+  if (twice.length) issues.push({ kind: 'bad', text: `${plural(twice.length, 'serial number')} placed more than once`, serials: twice });
+  const ids = new Set(ws.stations.map((s) => s.id));
+  const orphan = state.scans.filter((s) => s.status === 'placed' && !ids.has(s.stationId));
+  if (orphan.length) issues.push({ kind: 'warn', text: `${plural(orphan.length, 'stick')} belong to a member that was removed` });
+  const inRange = (t) => ws.stations.some((st) => t >= st.trayStart && t <= st.trayEnd);
+  const outside = [...new Set(state.scans.filter((s) => s.status === 'placed' && s.tray != null && !inRange(s.tray)).map((s) => s.tray))];
+  if (outside.length) issues.push({ kind: 'warn', text: `${plural(outside.length, 'tray')} outside every member’s tray range`, trays: outside });
+  const problems = state.scans.filter((s) => ['duplicate', 'nopart', 'full'].includes(s.status)).length;
+  if (problems) issues.push({ kind: 'warn', text: `${plural(problems, 'scan')} not placed (duplicate, unreadable or trays full) — see Log`, log: true });
+  return issues;
 }
 
 // --------------------------------------------------------------- camera ----
@@ -1394,7 +1617,39 @@ function setView(v) {
 
 function bind() {
   $$('.tabs button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-  $('#wsButton').addEventListener('click', showStartScreen);
+  $('#wsButton').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleProjectMenu();
+  });
+  $('#projMenu').addEventListener('click', onProjectMenu);
+  document.addEventListener('click', (e) => {
+    if (!$('#projMenu').hidden && !e.target.closest('.pm-wrap')) closeProjectMenu();
+  });
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && closeProjectMenu());
+  $('#backupNag').addEventListener('click', (e) => {
+    const a = e.target.dataset && e.target.dataset.nag;
+    if (a === 'backup') backup();
+    if (a === 'later') {
+      LS.set('nagSnooze.' + state.ws.id, Date.now() + 8 * 3600 * 1000);
+      hideBackupNag();
+    }
+  });
+  $('#reloadBtn').addEventListener('click', () => location.reload());
+  $('#backupAllBtn').addEventListener('click', backupAll);
+  $('#aboutInfo').addEventListener('click', async (e) => {
+    if (e.target.id === 'clearDiag') {
+      LS.set('errors', []);
+      renderAbout();
+    } else if (e.target.id === 'copyDiag') {
+      const text = `DDR Tray Scanner ${APP_VERSION}\n${navigator.userAgent}\n\n` + (LS.get('errors', []) || []).map((x) => `${x.at} [${x.where}] v${x.v}\n${x.msg}`).join('\n\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Diagnostics copied — paste them in a message');
+      } catch {
+        prompt('Copy the diagnostics:', text);
+      }
+    }
+  });
   $('#startScreen').addEventListener('click', onStartClick);
   $('#startScreen').addEventListener('change', (e) => {
     if (e.target.dataset.start !== 'restorefile') return;
@@ -1733,6 +1988,8 @@ async function promptJoin(info) {
 // ----------------------------------------------------------------- boot ----
 
 async function boot() {
+  window.addEventListener('error', (e) => reportError(e.error || e.message, 'page'));
+  window.addEventListener('unhandledrejection', (e) => reportError(e.reason, 'async'));
   bind();
   requestPersistence();
   try {
@@ -1745,8 +2002,24 @@ async function boot() {
   // Every visit starts by choosing: create a project or open an existing one.
   await showStartScreen();
   if (join) await promptJoin(join);
+  setInterval(drainOtherProjects, 60000);
+  window.addEventListener('online', drainOtherProjects);
+  drainOtherProjects();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker
+      .register('sw.js')
+      .then((reg) => {
+        // A newer version was published: offer a reload instead of switching code mid-scan.
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) $('#updateBar').hidden = false;
+          });
+        });
+        setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+      })
+      .catch(() => {});
   }
 }
 

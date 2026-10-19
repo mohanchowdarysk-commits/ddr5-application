@@ -26,6 +26,8 @@ No install and no server to run. It's plain HTML and JavaScript, hosted free on 
 - **Find tab**: type or scan a part number or serial number to see which tray(s) hold it.
 - **Dashboard**: sticks by brand, generation and station, the top part numbers, scans today, and what needs attention.
 - **Log**: every scan with search and filters. You can edit a note, move a stick to another tray manually, or delete a scan. Exports to **CSV** or **Excel**.
+- **Project switcher**: click the project name (top right) to jump to another project, create one, or open the full list.
+- **Reliability**: a scan is saved on the device *before* its tray number appears, and if saving fails you see a red **NOT SAVED**. Team projects keep uploading in the background after you switch away. You can **back up all projects** in one file, and device-only projects remind you to back up daily. The Dashboard **data check** flags mixed trays, over-full trays and serials placed twice. A **new-version banner** offers a reload, and **About & diagnostics** shows the version, storage and recent problems. See [CHANGELOG.md](CHANGELOG.md).
 - **Start screen**: every time the app opens it asks you to **create a new project** or **open an existing one**, with scan counts and when each project was last opened. Nothing is opened or created automatically.
 - **Safe deleting**: projects are never deleted automatically. **Delete this project…** shows a warning with the scan count and offers a backup first, then moves the project to **Recently deleted** on the start screen, where it can be restored at any time. Removing it for good needs **Delete forever** and typing the project's name. When a team project reloads from the Google Sheet, any scan on the device that the sheet doesn't have yet is kept and uploaded, never dropped.
 - **Projects**: on the start screen (or the project button at the top right), choose **＋ Create new project**. Give it a name, list the **members** (one per line), choose **trays per member**, and set **sticks per tray**, or tick **No limit** so every stick of a part number goes into one tray. Each member automatically gets their own tray range (e.g. Ashu 1–100, Ronny 101–200), so two people never fill the same tray. You can keep many projects (one per batch, shipment or customer) and switch between them.
@@ -114,7 +116,7 @@ No build step. The code is ES modules in `js/`, with third-party libraries bundl
 | `js/app.js` | UI |
 | `sw.js` | offline cache |
 
-Run the tests with `npm test` (Node 18+; there are no dependencies to install).
+Run the logic tests with `npm test` (Node 18+, no dependencies). The browser tests (`npm run e2e`, 27 checks of the real app in headless Chromium) need `npm install --no-save playwright && npx playwright install chromium`. GitHub runs both on every push.
 
 Bundled libraries: [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) 1.2.0 (SheetJS with cell styles, Apache-2.0), [barcode-detector](https://github.com/Sec-ant/barcode-detector) 3.2.2 + [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) 3.1.3 (MIT). Their licenses are in `vendor/`.
 

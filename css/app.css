@@ -312,3 +312,25 @@ body.choosing .tabs, body.choosing main, body.choosing #syncPill { display: none
 .trash .proj { opacity: .85; }
 .warn-box { border: 2px solid var(--bad); background: var(--bad-bg); color: var(--text); border-radius: 10px; padding: 12px 14px; }
 .warn-box b.big { color: var(--bad); font-size: 16px; }
+
+/* project switcher */
+.pm-wrap { position: relative; margin-left: auto; }
+.pm-wrap .ws-button { margin-left: 0; }
+.proj-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(340px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / 18%); padding: 6px; }
+.pm-head { padding: 8px 10px; font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-label { padding: 4px 10px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.pm-empty { padding: 6px 10px; font-size: 13px; color: var(--muted); }
+.pm-item { display: flex; justify-content: space-between; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 9px 10px; font: inherit; color: var(--text); cursor: pointer; }
+.pm-item:hover, .pm-item:focus-visible { background: var(--surface-2); }
+.pm-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pm-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+/* notice bars */
+.notice-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 16px; background: var(--warn-bg); color: var(--text); border-bottom: 1px solid var(--border); font-size: 14px; }
+#updateBar { background: var(--good-bg); }
+body.choosing #backupNag { display: none; }
+/* health + diagnostics */
+.health-item { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 14px; flex-wrap: wrap; }
+.health-item:last-child { border-bottom: 0; }
+.health-item .chip.no-dot { cursor: pointer; }
+.diag { white-space: pre-wrap; font-size: 12px; background: var(--surface-2); padding: 10px; border-radius: 8px; max-height: 260px; overflow: auto; }
