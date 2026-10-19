@@ -174,7 +174,8 @@ const MICRON = (n) => `(L)64GB 2RX4 PC5-6400B-RA1-1312-XT(S)802C1A2634D4${String
   check('storage failure shows NOT SAVED', /NOT SAVED/.test(await p.textContent('#result')));
   check('…and the scan is not listed as placed', !/D4000003/.test(await p.textContent('#recentTable')));
   await p.click('[data-view=settings]');
-  await p.waitForFunction(() => /Recent problems/.test(document.querySelector('#aboutInfo').textContent));
+  // The panel refreshes asynchronously; earlier visits to Settings left older text in it.
+  await p.waitForFunction(() => /Recent problems: 1/.test(document.querySelector('#aboutInfo').textContent), null, { timeout: 5000 }).catch(() => {});
   check('the problem is recorded in About & diagnostics', /Recent problems: 1/.test(await p.textContent('#aboutInfo')), await p.textContent('#aboutInfo'));
 
   check('no unexpected page errors', pageErrors.length === 0, pageErrors.join(' | '));
